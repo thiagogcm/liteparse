@@ -33,6 +33,7 @@ LiteParse is written in Rust with bindings for multiple platforms:
 ```
 crates/
 ├── liteparse/           # Core Rust library (parsing, grid projection, OCR, output)
+├── liteparse-c/         # C ABI + generated header (cbindgen)
 ├── pdfium-sys/          # Raw FFI bindings to PDFium (auto-downloads pdfium)
 ├── pdfium/              # Safe Rust wrapper around pdfium-sys
 ├── liteparse-napi/      # Node.js native addon (napi-rs)
@@ -52,6 +53,7 @@ You'll need the following tools installed:
 | Tool | Purpose | Install |
 |------|---------|---------|
 | **Rust toolchain** | Core library and all bindings | [rustup.rs](https://rustup.rs) |
+| **cbindgen 0.29.4** | Regenerate the C header | `cargo install cbindgen --version 0.29.4 --locked` |
 | **napi-rs CLI** | Node.js native addon builds | `npm i -g @napi-rs/cli` |
 | **maturin** | Python extension builds | `pip install maturin` |
 | **wasm-pack** | WebAssembly builds | `cargo install wasm-pack` |
@@ -89,6 +91,18 @@ To test locally, import from the package directly or use `npm link`:
 ```js
 import { LiteParse } from './packages/node/dist/lib.js';
 ```
+
+### C bindings (cbindgen)
+
+```bash
+cargo build --release -p liteparse-c --no-default-features
+make c-header
+cc -std=c11 -Wall -Wextra -Werror -pedantic-errors \
+  -I crates/liteparse-c/include -fsyntax-only \
+  crates/liteparse-c/tests/header_smoke.c
+```
+
+The generated `crates/liteparse-c/include/liteparse.h` is checked in. Regenerate it after changing the exported C ABI and include the updated header in the same commit.
 
 ### Python bindings (maturin + PyO3)
 

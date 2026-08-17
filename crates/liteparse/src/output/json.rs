@@ -168,13 +168,10 @@ pub(crate) fn build_json(pages: &[ParsedPage], extract_text_metadata: bool) -> P
     }
 }
 
-/// Format complete parse output, including extracted-image metadata and
-/// document-level fields (form type, creator/producer, XFA packets). Pixel
-/// bytes are written separately by the CLI's `--image-output-dir` option.
-pub fn format_json_result(
+fn build_json_result(
     result: &crate::parser::ParseResult,
     extract_text_metadata: bool,
-) -> Result<String, serde_json::Error> {
+) -> ParseResultJson {
     let mut json = build_json(&result.pages, extract_text_metadata);
     json.total_pages = result.total_pages;
     json.images = result
@@ -197,7 +194,27 @@ pub fn format_json_result(
     json.image_error_count = result.image_error_count;
     json.form_type = result.form_type;
     json.xfa_packets = result.xfa_packets.clone();
-    serde_json::to_string_pretty(&json)
+    json
+}
+
+/// Build complete parse output as a structured JSON value, including
+/// extracted-image metadata and document-level fields. This lets bindings add
+/// their own top-level fields before serializing exactly once.
+pub fn json_result_value(
+    result: &crate::parser::ParseResult,
+    extract_text_metadata: bool,
+) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(build_json_result(result, extract_text_metadata))
+}
+
+/// Format complete parse output, including extracted-image metadata and
+/// document-level fields (form type, creator/producer, XFA packets). Pixel
+/// bytes are written separately by the CLI's `--image-output-dir` option.
+pub fn format_json_result(
+    result: &crate::parser::ParseResult,
+    extract_text_metadata: bool,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&build_json_result(result, extract_text_metadata))
 }
 
 /// Format parsed pages as pretty-printed JSON string.
@@ -422,6 +439,7 @@ mod tests {
         };
         let value: serde_json::Value =
             serde_json::from_str(&format_json_result(&result, false).unwrap()).unwrap();
+        assert_eq!(value, json_result_value(&result, false).unwrap());
         assert_eq!(value["total_pages"], 3);
         assert!(value.get("creator").is_none());
         assert!(value.get("producer").is_none());

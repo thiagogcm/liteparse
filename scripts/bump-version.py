@@ -8,6 +8,7 @@
 
 Updates versions across:
 - crates/liteparse/Cargo.toml
+- crates/liteparse-c/Cargo.toml (and its liteparse dep)
 - crates/liteparse-napi/Cargo.toml (and its liteparse dep)
 - crates/liteparse-python/Cargo.toml (and its liteparse dep)
 - crates/liteparse-wasm/Cargo.toml
@@ -24,7 +25,7 @@ Accepts versions in:
 Usage:
   scripts/bump-version.py <version>                  # update all packages
   scripts/bump-version.py <version> --package <pkg>  # update only one
-      where <pkg> is one of: core, node, python, wasm
+      where <pkg> is one of: core, c, node, python, wasm
 
 Examples:
   scripts/bump-version.py 2.0.1
@@ -135,11 +136,17 @@ def update_pyproject_version(path: Path, new_version: str) -> None:
 def bump_core(semver: str) -> None:
     print("• core (crates/liteparse)")
     update_cargo_version(REPO_ROOT / "crates/liteparse/Cargo.toml", semver)
-    # Also update the path-dep version pin used by napi/python crates so it
+    # Also update the path-dep version pin used by the binding crates so it
     # stays in sync with the core crate's own version.
     print("  syncing liteparse dep version in dependent crates")
+    update_liteparse_dep(REPO_ROOT / "crates/liteparse-c/Cargo.toml", semver)
     update_liteparse_dep(REPO_ROOT / "crates/liteparse-napi/Cargo.toml", semver)
     update_liteparse_dep(REPO_ROOT / "crates/liteparse-python/Cargo.toml", semver)
+
+
+def bump_c(semver: str) -> None:
+    print("• c (crates/liteparse-c)")
+    update_cargo_version(REPO_ROOT / "crates/liteparse-c/Cargo.toml", semver)
 
 
 def bump_node(semver: str) -> None:
@@ -160,7 +167,7 @@ def bump_wasm(semver: str) -> None:
     update_json_version(REPO_ROOT / "packages/wasm/package.json", semver)
 
 
-PACKAGES = ("core", "node", "python", "wasm")
+PACKAGES = ("core", "c", "node", "python", "wasm")
 
 
 def main() -> int:
@@ -185,6 +192,8 @@ def main() -> int:
     for pkg in targets:
         if pkg == "core":
             bump_core(semver)
+        elif pkg == "c":
+            bump_c(semver)
         elif pkg == "node":
             bump_node(semver)
         elif pkg == "python":

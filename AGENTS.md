@@ -6,13 +6,13 @@
 
 **LiteParse** is an open-source PDF parsing library written in **Rust**, focused on fast, lightweight document processing with spatial text extraction. It runs entirely locally with zero cloud dependencies by default.
 
-Language bindings are provided for **Node.js/TypeScript** (via napi-rs), **Python** (via PyO3), and **WebAssembly** (via wasm-bindgen).
+Language bindings are provided for **C** (via a generated cbindgen header), **Node.js/TypeScript** (via napi-rs), **Python** (via PyO3), and **WebAssembly** (via wasm-bindgen).
 
 ### Key Capabilities
 - **Spatial text extraction** with precise bounding boxes
 - **Flexible OCR** (built-in Tesseract or pluggable HTTP servers)
 - **Multi-format support** (PDFs, DOCX, XLSX, PPTX, images via conversion)
-- **Multi-language bindings**: Rust, Node.js/TypeScript, Python, Browser (WASM)
+- **Multi-language bindings**: Rust, C, Node.js/TypeScript, Python, Browser (WASM)
 - **CLI** available from all installation methods (`cargo`, `npm`, `pip`)
 
 ## Directory Structure
@@ -41,6 +41,7 @@ liteparse/
 │   │           ├── mod.rs
 │   │           ├── json.rs
 │   │           └── text.rs
+│   ├── liteparse-c/        # C ABI + generated cbindgen header
 │   ├── liteparse-napi/     # Node.js bindings (napi-rs)
 │   ├── liteparse-python/   # Python bindings (PyO3 / maturin)
 │   ├── liteparse-wasm/     # WASM bindings (wasm-bindgen)
@@ -82,6 +83,7 @@ The core parsing logic is written in Rust for performance and safety. Language-s
 - `liteparse-napi` → Node.js via napi-rs
 - `liteparse-python` → Python via PyO3/maturin
 - `liteparse-wasm` → Browser via wasm-bindgen
+- `liteparse-c` → C via an opaque handle + cbindgen-generated header
 
 Each binding crate is thin — it wraps the core `liteparse` crate's types and async API.
 
@@ -130,7 +132,7 @@ Key files in `crates/liteparse/src/`:
 1. Add field to `LiteParseConfig` in `config.rs`
 2. Add clap arg in `main.rs`
 3. Wire through `parser.rs`
-4. Expose in binding crates (`liteparse-napi`, `liteparse-python`, `liteparse-wasm`)
+4. Expose in binding crates (`liteparse-c`, `liteparse-napi`, `liteparse-python`, `liteparse-wasm`)
 
 ### Adding / Modifying Node.js Wrapper
 - Edit `packages/node/src/lib.ts` for library API changes
@@ -164,6 +166,7 @@ Key files in `crates/liteparse/src/`:
 - **Node.js**: `packages/node/src/lib.ts` exports `LiteParse` class
 - **Python**: `packages/python/liteparse/parser.py` exports `LiteParse` class
 - **WASM**: `crates/liteparse-wasm/` exposes `LiteParse` via wasm-bindgen
+- **C**: `crates/liteparse-c/` exposes path/byte parsing through a generated C ABI
 
 ## Related Documentation
 

@@ -1,0 +1,17 @@
+style = "type"
+language = "C"
+usize_is_size_t = true
+include_guard = "LITEPARSE_H"
+cpp_compat = true
+# Only the headers the ABI actually uses.
+no_includes = true
+sys_includes = ["stdbool.h", "stddef.h", "stdint.h"]
+
+[parse]
+parse_deps = false
+
+[enum]
+prefix_with_name = true
+
+# No [export] include list: cbindgen already exports every #[no_mangle] pub
+# extern fn and pub const in src/lib.rs, so the code is the single registry.

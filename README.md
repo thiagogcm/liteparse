@@ -42,7 +42,7 @@ hard stuff so your models see clean, structured data and markdown.
 - **Multiple Output Formats**: Markdown, JSON, and Text
 - **Markdown Output**: Structured Markdown with headings, tables, lists, images, and links — great for feeding LLMs and RAG pipelines
 - **Bounding Boxes**: Precise text positioning information
-- **Multi-language**: Use from Rust, Node.js/TypeScript, Python, or the browser (WASM)
+- **Multi-language**: Use from Rust, C, Node.js/TypeScript, Python, or the browser (WASM)
 - **Multi-platform**: Linux, macOS (Intel/ARM), Windows
 
 ```mermaid
@@ -80,8 +80,9 @@ flowchart LR
           NAPI["Node.js / TypeScript\nnapi-rs"]
           PYO3["Python\nPyO3"]
           WASM["Browser / WASM\nwasm-bindgen"]
+          CAPI["C\ncbindgen"]
           CLI["CLI\ncargo / npm / pip"]
-          NAPI ~~~ PYO3 ~~~ WASM ~~~ CLI
+          NAPI ~~~ PYO3 ~~~ WASM ~~~ CAPI ~~~ CLI
       end
 
       PDF --> EXTRACT
@@ -113,18 +114,20 @@ flowchart LR
       style NAPI fill:#FFBFF8,color:#000000,stroke:#FF8DF2,stroke-width:1px
       style PYO3 fill:#FFBFF8,color:#000000,stroke:#FF8DF2,stroke-width:1px
       style WASM fill:#FFBFF8,color:#000000,stroke:#FF8DF2,stroke-width:1px
+      style CAPI fill:#FFBFF8,color:#000000,stroke:#FF8DF2,stroke-width:1px
       style CLI fill:#FFBFF8,color:#000000,stroke:#FF8DF2,stroke-width:1px
 ```
 
 ## Installation
 
-Install via your preferred package manager. All versions (except WASM) ship with the same `lit` CLI.
+Install via your preferred package manager. The Rust, Node.js, and Python distributions ship with the same `lit` CLI.
 
 | Language | Install | Library Docs |
 |----------|---------|--------------|
 | **Node.js / TypeScript** | `npm i -g @llamaindex/liteparse` | [Node.js README](packages/node/README.md) |
 | **Python** | `pip install liteparse` | [Python README](packages/python/README.md) |
 | **Rust** | `cargo install liteparse` (CLI) / `cargo add liteparse` (lib) | [Rust README (crates.io)](crates/liteparse/README.md) |
+| **C** | Build `liteparse-c` from source | [C bindings README](crates/liteparse-c/README.md) |
 | **Browser (WASM)** | `npm i @llamaindex/liteparse-wasm` | [WASM README](packages/wasm/README.md) |
 
 ### Agent Skill
@@ -550,6 +553,7 @@ The project is a Rust workspace with the core library and language-specific bind
 ```
 crates/
 ├── liteparse/          # Core library + CLI binary
+├── liteparse-c/        # C ABI + generated header (cbindgen)
 ├── liteparse-napi/     # Node.js bindings (napi-rs)
 ├── liteparse-python/   # Python bindings (PyO3)
 ├── liteparse-wasm/     # WASM bindings (wasm-bindgen)
@@ -566,6 +570,10 @@ packages/
 ```bash
 # Build the CLI
 cargo build --release -p liteparse
+
+# Build the C dynamic/static libraries and regenerate the header
+cargo build --release -p liteparse-c --no-default-features
+make c-header
 
 # Build Node.js bindings
 cd packages/node && npm run build

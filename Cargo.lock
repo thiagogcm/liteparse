@@ -2047,6 +2047,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "liteparse-c"
+version = "2.13.0"
+dependencies = [
+ "liteparse",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "liteparse-napi"
 version = "2.13.1"
 dependencies = [
