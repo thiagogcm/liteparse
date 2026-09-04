@@ -240,6 +240,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text: "txt".into(),
             markdown: String::new(),
@@ -489,10 +490,13 @@ mod tests {
             }),
             quadpoint_rects: vec![],
             uri: None,
+            object_number: Some(37),
         }]);
         let value = serde_json::to_value(build_json(&[parsed_page], false)).unwrap();
         assert_eq!(value["pages"][0]["annotations"][0]["subtype"], "highlight");
         assert_eq!(value["pages"][0]["annotations"][0]["rect"]["width"], 90.0);
+        // The C-only object number must not change the shared CLI schema.
+        assert!(value["pages"][0]["annotations"][0]["object_number"].is_null());
     }
 
     #[test]

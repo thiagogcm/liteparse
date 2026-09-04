@@ -18,6 +18,7 @@ mod tests {
             page_number: n,
             page_width: 0.0,
             page_height: 0.0,
+            geometry: None,
             content_bounds: None,
             text: text.into(),
             markdown: String::new(),

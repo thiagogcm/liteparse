@@ -1339,6 +1339,7 @@ mod tests {
                 page_number: 1,
                 page_width: 612.0,
                 page_height: 792.0,
+                geometry: None,
                 content_bounds: None,
                 text_items: items,
                 graphics: Vec::new(),
@@ -1623,6 +1624,7 @@ mod tests {
             page_number,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: Vec::new(),
             graphics: Vec::new(),
@@ -1762,6 +1764,7 @@ mod tests {
             page_number,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![TextItem {
                 text: "this page already has real native text content".into(),
@@ -1790,6 +1793,7 @@ mod tests {
             page_number,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![TextItem {
                 text: "small native header that is not enough".into(),

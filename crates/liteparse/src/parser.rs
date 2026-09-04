@@ -1255,6 +1255,7 @@ mod tests {
             page_number: 1,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![TextItem {
                 text: "hello".into(),
@@ -1483,6 +1484,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text: String::new(),
             markdown: "intro\n\n![](img_p2_1.jpg)\n\noutro".into(),

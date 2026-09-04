@@ -558,6 +558,7 @@ impl JsPageInput {
             page_number: self.page_number as usize,
             page_width: self.page_width as f32,
             page_height: self.page_height as f32,
+            geometry: None,
             content_bounds: None,
             text_items: self.text_items.iter().map(JsTextItem::to_rust).collect(),
             graphics: self

@@ -156,7 +156,7 @@ fn rgb_at(rgba: &[u8], pixel_index: usize) -> u32 {
 
 /// True when every pixel matches the first pixel's RGB (alpha ignored; the
 /// render always starts from an opaque white fill).
-pub(crate) fn is_solid_fill_rgba(rgba: &[u8], width: usize, height: usize) -> bool {
+pub fn is_solid_fill_rgba(rgba: &[u8], width: usize, height: usize) -> bool {
     if width == 0 || height == 0 || rgba.len() < width * height * 4 {
         return false;
     }
@@ -169,7 +169,7 @@ pub(crate) fn is_solid_fill_rgba(rgba: &[u8], width: usize, height: usize) -> bo
 /// (rectangles + lines modes; whitespace mode is not ported, so white areas
 /// are skipped). Returned coordinates are scaled from pixels to the page's
 /// viewport space (`page_width`/`page_height` in PDF points).
-pub(crate) fn find_solid_rects_rgba(
+pub fn find_solid_rects_rgba(
     rgba: &[u8],
     width: usize,
     height: usize,

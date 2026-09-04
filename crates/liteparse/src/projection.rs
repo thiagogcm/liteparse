@@ -2895,6 +2895,7 @@ pub fn project_pages_to_grid(pages: Vec<Page>) -> Vec<ParsedPage> {
                 page_number: page.page_number,
                 page_width: page.page_width,
                 page_height: page.page_height,
+                geometry: page.geometry,
                 content_bounds: page.content_bounds,
                 text,
                 markdown: String::new(),
@@ -5140,6 +5141,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             graphics: Vec::new(),
             vector_graphics: None,
@@ -5508,6 +5510,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text_items: Vec::new(),
             graphics: Vec::new(),
@@ -5533,6 +5536,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![
                 TextItem {
@@ -5584,6 +5588,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![
                 TextItem {
@@ -5643,6 +5648,7 @@ mod tests {
             page_number: 1,
             page_width: 612.0,
             page_height: 792.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![
                 TextItem {

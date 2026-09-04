@@ -204,12 +204,31 @@ pub struct WordBox {
     pub height: f32,
 }
 
+/// Source PDF geometry used to derive the page viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageGeometry {
+    /// Visible box in bottom-left-origin PDF space, before `/UserUnit`.
+    pub box_left: f32,
+    pub box_bottom: f32,
+    pub box_right: f32,
+    pub box_top: f32,
+    /// Page `/UserUnit`, normally 1.0.
+    pub user_unit: f32,
+    /// Clockwise quarter turns, 0..=3. `None` when PDFium reported a value
+    /// outside that range, which it does when it cannot tell; zero is an
+    /// ordinary rotation and never means absence.
+    pub rotation_quarter_turns: Option<u8>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Serialize)]
 pub struct Page {
     pub page_number: usize,
     pub page_width: f32,
     pub page_height: f32,
+    /// Source geometry; absent for caller-assembled pages.
+    #[serde(skip)]
+    pub geometry: Option<PageGeometry>,
     /// Union bbox of the page's top-level content objects in viewport
     /// coords (visible content extent). `None` for empty pages.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -260,6 +279,10 @@ pub struct PageError {
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentAnnotation {
     pub subtype: String,
+    /// PDF object number used to join structure-tree annotation references.
+    /// Not serialized because it is currently C-binding-only.
+    #[serde(skip)]
+    pub object_number: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contents: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -415,6 +438,8 @@ pub struct ParsedPage {
     pub page_number: usize,
     pub page_width: f32,
     pub page_height: f32,
+    #[serde(skip)]
+    pub geometry: Option<PageGeometry>,
     /// Union bbox of the page's top-level content objects in viewport
     /// coords (visible content extent). `None` for empty pages.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -814,6 +839,7 @@ mod tests {
             page_number: 1,
             page_width: 100.0,
             page_height: 200.0,
+            geometry: None,
             content_bounds: None,
             text_items: vec![sample_item()],
             graphics: vec![],

@@ -3,7 +3,7 @@ use crate::error::LiteParseError;
 use crate::glyph_names::resolve_glyph_name;
 use crate::types::{
     DocumentAnnotation, ExtractedImage, FormField, GraphicPrimitive, ImageRef, OutlineTarget,
-    Page as LitePage, PageError, PdfInput, Rect, StructNode, StructureAttributeValue,
+    Page as LitePage, PageError, PageGeometry, PdfInput, Rect, StructNode, StructureAttributeValue,
     StructureTree, StructureTreeElement, TextItem, VectorGraphics, VectorLine, VectorShape,
     WordBox,
 };
@@ -219,6 +219,16 @@ fn extract_single_page(
     // space so projection, filtering, and consumers do not clip content
     // at the unrotated MediaBox width on /Rotate 90 or /Rotate 270 pages.
     let (page_width, page_height) = page.viewport_size(&view_box);
+    let geometry = PageGeometry {
+        box_left: view_box.left,
+        box_bottom: view_box.bottom,
+        box_right: view_box.right,
+        box_top: view_box.top,
+        user_unit: page.user_unit(),
+        rotation_quarter_turns: u8::try_from(page.rotation())
+            .ok()
+            .filter(|turns| *turns < 4),
+    };
     // Once a qualifying widget is found, PDFium flattens every visible
     // annotation on the page. Collect every annotation-backed output first.
     let links = if extract_links {
@@ -361,6 +371,7 @@ fn extract_single_page(
             page_number: page_number as usize,
             page_width,
             page_height,
+            geometry: Some(geometry),
             content_bounds: output_options
                 .extract_content_bounds
                 .then_some(content_bounds)
@@ -463,6 +474,7 @@ pub(crate) struct ExtractionOutputOptions {
 fn document_annotation(annotation: &pdfium::PdfAnnotation) -> DocumentAnnotation {
     DocumentAnnotation {
         subtype: annotation.subtype.clone(),
+        object_number: annotation.object_number,
         contents: annotation.contents.clone(),
         created: annotation.created.clone(),
         modified: annotation.modified.clone(),
@@ -635,7 +647,7 @@ fn assign_strikethrough(items: &mut [TextItem], graphics: &[GraphicPrimitive]) {
 
 /// Walk the document outline (bookmarks). Returns entries in pre-order.
 /// Empty when the PDF has no outline.
-pub(crate) fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
+pub fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
     document
         .outline()
         .into_iter()
@@ -910,7 +922,7 @@ fn render_page_images(
 
 /// Encode RGBA pixel bytes to PNG. Used by both the image-embed path and the
 /// `render` module (page rasterization / screenshots).
-pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
+pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
     let mut png_buf = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
     encoder.write_image(rgba, width, height, image::ColorType::Rgba8.into())?;
@@ -3903,6 +3915,7 @@ mod tests {
             page_number: 1,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: items,
             graphics: Vec::new(),
