@@ -3,7 +3,7 @@ use crate::error::LiteParseError;
 use crate::glyph_names::resolve_glyph_name;
 use crate::types::{
     DocumentAnnotation, ExtractedImage, FormField, GraphicPrimitive, ImageRef, OutlineTarget,
-    Page as LitePage, PageError, PdfInput, Rect, StructNode, StructureAttributeValue,
+    Page as LitePage, PageError, PageGeometry, PdfInput, Rect, StructNode, StructureAttributeValue,
     StructureTree, StructureTreeElement, TextItem, VectorGraphics, VectorLine, VectorShape,
     WordBox,
 };
@@ -219,6 +219,16 @@ fn extract_single_page(
     // space so projection, filtering, and consumers do not clip content
     // at the unrotated MediaBox width on /Rotate 90 or /Rotate 270 pages.
     let (page_width, page_height) = page.viewport_size(&view_box);
+    let geometry = PageGeometry {
+        box_left: view_box.left,
+        box_bottom: view_box.bottom,
+        box_right: view_box.right,
+        box_top: view_box.top,
+        user_unit: page.user_unit(),
+        rotation_quarter_turns: u8::try_from(page.rotation())
+            .ok()
+            .filter(|turns| *turns < 4),
+    };
     // Once a qualifying widget is found, PDFium flattens every visible
     // annotation on the page. Collect every annotation-backed output first.
     let links = if extract_links {
@@ -267,6 +277,11 @@ fn extract_single_page(
     });
     let form_fields = output_options.extract_form_fields.then(|| {
         form_environment.map_or_else(Vec::new, |form| {
+            // PDFium initializes widget state and regenerates missing or stale
+            // appearances when a page is opened in the form environment. Keep
+            // the notification alive for the complete field walk so structured
+            // extraction observes the same values as rendering.
+            let _form_page = page.notify_form_page_loaded(form);
             page.form_fields(form, &view_box, page_number)
                 .into_iter()
                 .map(|field| FormField {
@@ -362,6 +377,7 @@ fn extract_single_page(
             page_label: document.page_label(page_index),
             page_width,
             page_height,
+            geometry: Some(geometry),
             content_bounds: output_options
                 .extract_content_bounds
                 .then_some(content_bounds)
@@ -470,6 +486,7 @@ fn document_annotation(annotation: &pdfium::PdfAnnotation) -> DocumentAnnotation
         subtype: annotation.subtype.clone(),
         // The pdfium layer keeps present-but-empty strings as `Some("")`; this
         // output has always omitted them.
+        object_number: annotation.object_number,
         contents: non_empty(&annotation.contents),
         created: non_empty(&annotation.created),
         modified: non_empty(&annotation.modified),
@@ -642,7 +659,7 @@ fn assign_strikethrough(items: &mut [TextItem], graphics: &[GraphicPrimitive]) {
 
 /// Walk the document outline (bookmarks). Returns entries in pre-order.
 /// Empty when the PDF has no outline.
-pub(crate) fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
+pub fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
     document
         .outline()
         .into_iter()
@@ -917,7 +934,7 @@ fn render_page_images(
 
 /// Encode RGBA pixel bytes to PNG. Used by both the image-embed path and the
 /// `render` module (page rasterization / screenshots).
-pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
+pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
     let mut png_buf = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
     encoder.write_image(rgba, width, height, image::ColorType::Rgba8.into())?;
@@ -3929,6 +3946,7 @@ mod tests {
             page_label: None,
             page_width: 100.0,
             page_height: 100.0,
+            geometry: None,
             content_bounds: None,
             text_items: items,
             graphics: Vec::new(),
