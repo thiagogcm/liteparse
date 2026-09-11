@@ -14,6 +14,16 @@ env:
   SKIP_INTEGRATION_TESTS: yes
 
 jobs:
+  c-header:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen@0.29.4
+      - run: cbindgen --config crates/liteparse-c/cbindgen.toml --crate liteparse-c --output crates/liteparse-c/include/liteparse.h
+      - run: git diff --exit-code -- crates/liteparse-c/include/liteparse.h
+
   fmt:
     runs-on: ubuntu-latest
     steps:
