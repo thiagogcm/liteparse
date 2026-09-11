@@ -2048,6 +2048,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "liteparse-c"
+version = "2.15.0"
+dependencies = [
+ "image",
+ "liteparse",
+ "liteparse-pdfium",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "liteparse-napi"
 version = "2.15.1"
 dependencies = [
