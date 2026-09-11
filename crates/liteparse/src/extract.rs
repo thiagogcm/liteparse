@@ -52,7 +52,7 @@ pub(crate) fn load_document_from_input<'lib>(
 /// Pages past the end of the document are skipped: a caller that parses a
 /// page slice (`target_pages`) may hand over corrections for the whole
 /// document. A non-cardinal angle is a config error.
-pub(crate) fn apply_page_orientation_corrections(
+pub fn apply_page_orientation_corrections(
     document: &Document,
     corrections: &[crate::config::PageOrientationCorrection],
 ) -> Result<(), LiteParseError> {
@@ -673,7 +673,7 @@ fn assign_strikethrough(items: &mut [TextItem], graphics: &[GraphicPrimitive]) {
 
 /// Walk the document outline (bookmarks). Returns entries in pre-order.
 /// Empty when the PDF has no outline.
-pub(crate) fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
+pub fn extract_outline(document: &Document) -> Vec<OutlineTarget> {
     document
         .outline()
         .into_iter()
@@ -948,7 +948,7 @@ fn render_page_images(
 
 /// Encode RGBA pixel bytes to PNG. Used by both the image-embed path and the
 /// `render` module (page rasterization / screenshots).
-pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
+pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, LiteParseError> {
     let mut png_buf = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
     encoder.write_image(rgba, width, height, image::ColorType::Rgba8.into())?;
