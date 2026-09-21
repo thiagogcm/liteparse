@@ -9,7 +9,7 @@ pub type LiteParseStatus = u32;
 
 /// The operation succeeded.
 pub const LITEPARSE_STATUS_OK: LiteParseStatus = 0;
-/// A pointer, length, or input string was invalid.
+/// A pointer, length, range, or input string was invalid.
 pub const LITEPARSE_STATUS_INVALID_ARGUMENT: LiteParseStatus = 1;
 /// A configuration value was invalid.
 pub const LITEPARSE_STATUS_INVALID_CONFIG: LiteParseStatus = 2;
@@ -29,7 +29,7 @@ pub const LITEPARSE_STATUS_OCR_ERROR: LiteParseStatus = 8;
 /// The source could not be read from the filesystem.
 pub const LITEPARSE_STATUS_IO_ERROR: LiteParseStatus = 9;
 /// A Rust panic was caught before it crossed the C ABI boundary. Free any
-/// returned handle and do not reuse it.
+/// handle involved and do not reuse it.
 pub const LITEPARSE_STATUS_PANIC: LiteParseStatus = 255;
 
 #[derive(Debug)]
@@ -100,6 +100,12 @@ fn store_error(error: &FfiError) {
 #[unsafe(no_mangle)]
 pub extern "C" fn liteparse_last_error() -> LiteParseByteView {
     LAST_ERROR.with(|slot| bytes_view(slot.borrow().as_bytes()))
+}
+
+/// Borrow the static binding version string.
+#[unsafe(no_mangle)]
+pub extern "C" fn liteparse_version() -> LiteParseByteView {
+    bytes_view(env!("CARGO_PKG_VERSION").as_bytes())
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {

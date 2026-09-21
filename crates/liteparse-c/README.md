@@ -1,16 +1,19 @@
 # LiteParse C bindings
 
-`liteparse-c` exposes LiteParse through a small, typed C ABI meant to be
-bound from foreign runtimes (Java, .NET, Go, …). The checked-in header
-`include/liteparse.h` is generated with [cbindgen](https://github.com/mozilla/cbindgen).
+`liteparse-c` exposes LiteParse through a small, packed C ABI meant to be
+bound from foreign runtimes. The checked-in header `include/liteparse.h` is
+generated with [cbindgen](https://github.com/mozilla/cbindgen).
 
-Three kinds of handle cover everything:
-
-| Handle | Created by | Purpose |
+| Handle | Created by | Read through |
 |---|---|---|
-| `LiteParseParser` | `liteparse_parser_new` | Configuration plus an optional in-process OCR callback. |
-| `LiteParseDocument` | `liteparse_document_open_path` / `_open_bytes` | A source opened once (non-PDF inputs are converted here; bytes are copied at open and again per parse, so prefer paths for large inputs). Parse, screenshot, and analyze any page selection against it. |
-| `LiteParseResult`, `LiteParseScreenshots`, `LiteParseComplexity`, `LiteParseRawText`, `LiteParseExtract`, `LiteParseSearchMatches` | document and result operations | Owned outputs read through packed `repr(C)` views. |
+| `LiteParseParser` | `liteparse_parser_new` | configuration plus an optional in-process OCR callback |
+| `LiteParseDocument` | `liteparse_document_open_path` / `_open_bytes` | `liteparse_document_info` |
+| `LiteParseResult` | `liteparse_document_parse`, `_extract`, `liteparse_parser_parse_content` | `liteparse_result_view` |
+| `LiteParseScreenshots` | `liteparse_document_screenshot` | `liteparse_screenshots_view` |
+| `LiteParseComplexity` | `liteparse_document_complexity` | `liteparse_complexity_view` |
+| `LiteParseRawText` | `liteparse_document_raw_text` | `liteparse_raw_text_view` |
+| `LiteParsePageObjects` | `liteparse_document_page_objects` | `liteparse_page_objects_view` |
+| `LiteParseSearchMatches` | `liteparse_result_search` | `liteparse_search_matches_view` |
 
 ## Build
 
@@ -44,31 +47,39 @@ static LiteParseByteView cstr(const char *s) {
 }
 
 int main(void) {
-  LiteParseConfig config = liteparse_config_default();
+  LiteParseConfig config;
+  liteparse_config_init(&config);
   config.bools_set = LITEPARSE_FLAG_QUIET;
   config.bools_values = LITEPARSE_FLAG_QUIET;
 
-  LiteParseParserNew parser = liteparse_parser_new(&config);
-  if (parser.status != LITEPARSE_STATUS_OK) return 1;
-
-  LiteParseDocumentNew document =
-      liteparse_document_open_path(parser.handle, cstr("document.pdf"));
-  LiteParseResultNew result = {LITEPARSE_STATUS_PARSE_ERROR, NULL};
-  if (document.status == LITEPARSE_STATUS_OK) {
-    result = liteparse_document_parse(document.handle, NULL, 0);
+  LiteParseParser *parser = NULL;
+  LiteParseDocument *document = NULL;
+  LiteParseResult *result = NULL;
+  LiteParseStatus status = liteparse_parser_new(&config, &parser);
+  if (status == LITEPARSE_STATUS_OK) {
+    status = liteparse_document_open_path(parser, cstr("document.pdf"), &document);
   }
-  if (result.status == LITEPARSE_STATUS_OK) {
-    LiteParseByteView text = liteparse_result_text(result.handle);
-    fwrite(text.ptr, 1, text.len, stdout);
+  if (status == LITEPARSE_STATUS_OK) {
+    status = liteparse_document_parse(document, NULL, 0, &result);
+  }
+  if (status == LITEPARSE_STATUS_OK) {
+    const LiteParseResultView *view = liteparse_result_view(result);
+    fwrite(view->text.ptr, 1, view->text.len, stdout);
+    for (size_t i = 0; i < view->content.pages_len; i++) {
+      const LiteParsePage *page = &view->content.pages[i];
+      const LiteParseTextItem *items = view->content.items + page->item_offset;
+      printf("page %u: %u items\n", page->page_number, page->item_count);
+      (void)items;
+    }
   } else {
     LiteParseByteView error = liteparse_last_error();
     fprintf(stderr, "%.*s\n", (int)error.len, (const char *)error.ptr);
   }
 
-  liteparse_result_free(result.handle);
-  liteparse_document_free(document.handle);
-  liteparse_parser_free(parser.handle);
-  return result.status == LITEPARSE_STATUS_OK ? 0 : 1;
+  liteparse_result_free(result);
+  liteparse_document_free(document);
+  liteparse_parser_free(parser);
+  return status == LITEPARSE_STATUS_OK ? 0 : 1;
 }
 ```
 
@@ -80,109 +91,107 @@ cc -std=c11 example.c -I crates/liteparse-c/include -L target/release \
   -lliteparse_c -o example
 ```
 
-## ABI rules
+## ABI model
 
-- Begin with `liteparse_config_default()` and set only the fields you need.
-  `size_of_config` must equal `sizeof(LiteParseConfig)`.
-- Set a flag bit in `bools_set` and its value in `bools_values`. Zero numeric
-  fields and `LITEPARSE_UNSET` enum fields keep the core defaults.
-- Strings and byte buffers are `LiteParseByteView`s: borrowed, not
-  NUL-terminated, and a null pointer with zero length means absent.
-  Configuration views are copied during `liteparse_parser_new`.
-- Views and slices returned from a handle borrow from that handle and stay
-  valid until it is freed. Search matches copy their items and outlive the
-  result they came from.
-- Optional scalars are a value plus a `has_*` flag. Follow the field order and
-  platform ABI padding represented by the checked-in header exactly. Most
-  structures group boolean fields at the end, but `LiteParseConfig` places
-  `has_crop_box` immediately after `crop_box` and may require padding before
-  the following `LiteParseByteView`.
-- Slice accessors write `*out_len` and return null with zero length for an
-  invalid handle, an invalid index, or an empty collection.
-- Every fallible function returns a `LiteParseStatus`; creation functions
-  return `{status, handle}` by value with a null handle on failure.
-  `liteparse_last_error()` then returns a thread-local message valid until the
-  next failed call on the same thread.
-- `LITEPARSE_STATUS_PANIC` means a Rust panic was caught at the boundary.
-  Free the handle involved and do not reuse it.
-- Handles are caller-owned and released once with their matching `*_free`.
-  Parser and document handles may be used from several threads at once,
-  including `liteparse_parser_set_ocr_callback`; destruction must wait for
-  in-flight operations.
+Three kinds of struct cross the boundary: **records** (array elements such
+as `LiteParsePage`, `LiteParseTextItem`, `LiteParseAnnotation`), **views**
+(`LiteParseContent`, `LiteParseResultView`, and the other `*View` and
+`*Info` structs, which hold the array pointers and lengths), and **inputs**
+(`LiteParseConfig`, `LiteParseContent`, `LiteParseRenderRegion`,
+`LiteParseOcrWord`). `LiteParseByteView` is the one pointer-carrying value
+that records embed.
 
-## Projected-layout snapshot
+- **Records are packed.** Every record is `repr(C)` and holds only
+  fixed-width scalars, nested records, and `LiteParseByteView`s. There are
+  no `bool` or `size_t` fields and no pointers other than byte views.
+  Optional values and boolean properties are bits in the record's `flags`
+  (`LITEPARSE_<RECORD>_FLAG_HAS_*`, `LITEPARSE_<RECORD>_FLAG_*`).
+- **Collections are flat arrays with ranges.** A handle owns one flat array
+  per record type; parents carry `uint32_t` `x_offset`/`x_count` pairs into
+  it. Index fields such as `parent_index` are absolute within their array,
+  with `LITEPARSE_NO_PARENT` for roots.
+- **One view per handle.** `liteparse_<handle>_view` returns a pointer to a
+  struct of `{ptr, len}` array pairs and scalars. It is borrowed from the
+  handle, valid until the matching `*_free`, and null for a null handle.
+  Empty arrays are a null pointer with zero length.
+- **Strings and byte buffers** are `LiteParseByteView`s: borrowed,
+  non-NUL-terminated UTF-8 (or raw bytes for PNG and image payloads). Absent
+  and empty are both a null pointer with zero length. Colors are packed ARGB
+  `uint32_t`. Enumerations are `uint32_t` constants.
+- **Creation** takes an out pointer and returns a `LiteParseStatus`; the out
+  pointer receives null on failure. `liteparse_last_error()` then returns a
+  thread-local message valid until the next failed call on the same thread.
+  `LITEPARSE_STATUS_PANIC` means a Rust panic was caught at the boundary:
+  free the handle involved and do not reuse it.
+- **Configuration** starts with `liteparse_config_init` and sets only what it
+  needs. Core booleans use a bit in `bools_set` plus its value in
+  `bools_values`; `LITEPARSE_UNSET` keeps the native default in `u32`
+  fields, so `max_pages = 0` is representable; zero `dpi` keeps the default.
+  `size_of_config` must equal `sizeof(LiteParseConfig)`. Views are copied
+  during `liteparse_parser_new`.
+- **Threads.** Parser and document handles may be used from several threads
+  at once, including `liteparse_parser_set_ocr_callback`; destruction must
+  wait for in-flight operations.
 
-`liteparse_result_projected_layout_snapshot` exposes the projected layout that
-the core retained on each parsed page. The snapshot owns flat, fixed-width
-arrays for pages, lines, spans, words, character codes, region paths, region
-nodes, region leaf items, and region children. Every offset and count is a
-`uint64_t` relative to its corresponding result-wide array.
+## Results
 
-Line records include the projected text, anchor, indentation, font evidence,
-RTL and figure flags, and ranges into dedicated projected-span records. Span
-records include the retained `TextItem` metadata plus ranges into words and
-raw character codes. Word boxes are in source-page coordinates, as indicated
-by `LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES`.
+`LiteParseResultView` embeds a `LiteParseContent` (pages, text items, word
+boxes, char codes, layout graphics, struct nodes, marked-content ids, image
+refs, images, annotations, quadpoints, form fields, option strings, structure
+nodes and attributes, blocks, cells, rows, vector shapes and lines, outline,
+page errors) plus result-only data: document text, creator, producer,
+`doc_meta`, `form_type`, screenshots and their rects, XFA packets, figure
+rects, item frames, projected lines and spans, and the XY-cut region tree.
 
-The line `anchor` field uses `LITEPARSE_PROJECTED_ANCHOR_*` constants. A
-region's `parent_index` is `LITEPARSE_PROJECTED_REGION_NO_PARENT` for the page
-root; child and item indices are otherwise zero-based indices into the flat
-arrays returned by the corresponding accessors.
+`LiteParsePage` carries a range into every page-scoped array, the page label,
+text, Markdown (under `LITEPARSE_OUTPUT_FORMAT_MARKDOWN`), geometry (visible
+box, user unit, rotation), content bounds, and inline complexity. Its
+`HAS_*` flags distinguish "extraction enabled, none found" from "disabled".
 
-Region paths contain child ordinals from the page root. Region records are
-flattened in pre-order and expose projected bboxes, parent indices, direct
-child ranges, and leaf item ranges. Region item indices refer to the page's
-projected text-item sequence.
+Text metadata (font metrics, colors, char codes, marked-content ids) is
+always exported when the core holds it; `LITEPARSE_RESULT_FLAG_TEXT_METADATA`
+reports whether it was requested. `liteparse_result_to_json` returns the
+core's JSON form of a parse result.
 
-The C layer cannot recover source-item provenance, original per-span geometry,
-or classifier block-to-line membership after the core projection pass has
-discarded those relationships. The snapshot therefore sets
-`LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE` and
-`LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE`. Consumers
-must not infer those relationships from matching text or rectangles.
+`liteparse_document_extract` returns a result with
+`LITEPARSE_RESULT_FLAG_EXTRACT_ONLY`: pre-projection pages with heuristic
+text items, graphics, and the configured extras, but no text, Markdown, or
+projection. Link stamping and word boxes follow the parse rules (links only
+under Markdown; word boxes when requested or under Markdown).
+`LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS` and `flattened_page_numbers`
+report pages flattened on a temporary document to recover widget text.
 
-All snapshot arrays and byte views borrow from the result and remain valid
-until `liteparse_result_free`. Use `liteparse_projected_layout_abi()` with
-`sizeof`, `_Alignof`, and `offsetof` to verify foreign declarations at
-runtime.
+Projected lines index `projected_spans` (text-item records sharing the
+content's `words` and `char_codes`) and `region_paths`. Regions are
+flattened in pre-order with absolute `parent_index` and child ranges; a
+line's region path is the sequence of child ordinals from its page's root.
+`item_frames` map projected geometry back to page space on pages where
+rotation handling displaced content.
 
 ## Operations on a document
 
 | Function | Notes |
 |---|---|
-| `liteparse_document_total_pages` | Page count recorded at open. |
-| `liteparse_document_outline` | Bookmarks, walked once at open. |
-| `liteparse_document_parse(doc, pages, len)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. |
-| `liteparse_document_screenshot(doc, pages, len, dpi, region)` | Render PNGs. `0` keeps the configured DPI. A non-null `region` (viewport points, top-left origin) crops each page; detected rects are then region-relative. The whole page is rasterized before cropping, so cost follows page size and DPI, not region size. |
-| `liteparse_document_complexity(doc, pages, len)` | Cheap pre-OCR signals per page with a `reasons_mask`; `liteparse_complexity_json` returns the full report. |
-| `liteparse_document_raw_text(doc, pages, len)` | Heuristic-free pdfium runs: no gap merge, projection, OCR, or Markdown. Read with `liteparse_raw_text_pages` / `liteparse_raw_text_items`; items include baseline-aware angles, tight grounding bounds, generated-space gaps, and visible form-widget appearance text. Uses the parser's `font_db_dir` resolver when set. |
-| `liteparse_document_extract(doc, pages, len)` | Pre-projection pages: heuristic text items, graphics, and configured extras. Link stamping and word boxes follow parse (links only for Markdown; word boxes when requested or Markdown). `liteparse_extract_as_content` packs items, graphics, words, struct-tree nodes, and image refs for `liteparse_parser_parse_content`. |
-| `liteparse_document_page_objects(doc, pages, len, flags)` | Unfiltered content-stream snapshot: kinds, matrices, pdfium y-up bounds, form children, path segments, image metadata. No size filters, viewport transforms, or form-matrix composition. `flags` is a mask of `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_RAW` / `_DECODED` / `_BITMAP`; payloads are omitted when those bits are clear. |
+| `liteparse_document_info` | Page count, `LITEPARSE_DOCUMENT_FLAG_CONVERTED`, and bookmarks walked at open. |
+| `liteparse_document_parse(doc, pages, len, &out)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. |
+| `liteparse_document_extract(doc, pages, len, &out)` | Pre-projection pages; feed `&view->content` to `liteparse_parser_parse_content` to project and classify. |
+| `liteparse_document_screenshot(doc, pages, len, dpi, region, &out)` | Render PNGs. `0` keeps the configured DPI. A non-null `region` (viewport points, top-left origin) crops each page; detected rects are then region-relative. The whole page is rasterized before cropping. |
+| `liteparse_document_complexity(doc, pages, len, &out)` | Cheap pre-OCR signals per page; `liteparse_complexity_to_json` returns the full report. |
+| `liteparse_document_raw_text(doc, pages, len, &out)` | Heuristic-free PDFium runs: no gap merge, projection, OCR, or Markdown. Items carry baseline-aware angles, tight grounding bounds, generated-space gaps, and visible form-widget appearance text. |
+| `liteparse_document_page_objects(doc, pages, len, flags, &out)` | Unfiltered content-stream snapshot: kinds, matrices, PDFium y-up bounds, form children, path segments, image metadata. `flags` selects `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_RAW` / `_DECODED` / `_BITMAP` payloads. |
 
 Page selections are validated against the document's page count (any page
 outside it is `LITEPARSE_STATUS_INVALID_ARGUMENT`), de-duplicated, and
-processed in ascending order by every operation. With
-`LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR` a page whose render or extraction
-fails is skipped; argument errors are never skipped.
-
-Results are read with `liteparse_result_text`, `liteparse_result_page_text`,
-`liteparse_result_page_label` (the PDF `/PageLabels` entry, or an empty view
-when the document defines none — fall back to `liteparse_result_page_number`),
-`liteparse_result_page_markdown` (filled under
-`LITEPARSE_OUTPUT_FORMAT_MARKDOWN`, while page text stays plain),
-`liteparse_result_text_items`, `liteparse_result_word_boxes`
-(`LITEPARSE_FLAG_EMIT_WORD_BOXES`), and the packed slices for images,
-screenshots, outline, page errors, annotations, form fields, structure trees,
-layout blocks, vector graphics, and XFA packets. `liteparse_result_to_json`
-returns the whole result as JSON, and `liteparse_result_search` finds phrase
-matches with merged bounding boxes.
+processed in ascending order. With `LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR` a
+page whose render or extraction fails is skipped; argument errors are never
+skipped. Configured orientation corrections apply to every operation.
 
 ## Caller-supplied content
 
-`liteparse_parser_parse_content` parses pages the host already extracted. There
-is no document to open: no conversion, PDFium, screenshots, or OCR. Start from
-`liteparse_content_default()` and fill packed arrays the same way results are
-read. All views are copied during the call.
+`liteparse_parser_parse_content` parses pages the host already extracted:
+no conversion, PDFium, screenshots, or OCR. Start from
+`liteparse_content_init` and fill the same `LiteParseContent` layout a result
+exposes; every view and array is copied during the call.
 
 ```c
 LiteParseTextItem item = {0};
@@ -192,38 +201,42 @@ item.y = 100.0f;
 item.width = 80.0f;
 item.height = 12.0f;
 
-LiteParseContentPage page = {0};
+LiteParsePage page = {0};
 page.page_number = 1;
-page.page_width = 612.0f;
-page.page_height = 792.0f;
+page.width = 612.0f;
+page.height = 792.0f;
 page.item_count = 1;
 
-LiteParseContent content = liteparse_content_default();
+LiteParseContent content;
+liteparse_content_init(&content);
 content.pages = &page;
 content.pages_len = 1;
 content.items = &item;
 content.items_len = 1;
-LiteParseResultNew result = liteparse_parser_parse_content(parser, &content);
+LiteParseResult *result = NULL;
+LiteParseStatus status = liteparse_parser_parse_content(parser, &content, &result);
 ```
 
-Empty block ranges run spatial projection (and the configured classifier).
-Any per-page `block_offset/count` or a document-level block range treats those
-blocks as the Markdown structure, including `merged_table` cells with
-`colspan`/`rowspan`. Optional packed arrays (`words`, `struct_nodes`,
-`image_refs`) ride with the items so extract snapshots can re-enter parse.
-An optional `page_label` on each `LiteParseContentPage` is forwarded to the
-result; leave it empty for `None`. `max_pages` truncates the supplied list
-on both paths and drops document-level blocks when it does. `crop_box` and
-`skip_diagonal_text` are applied before projection, matching `document_parse`.
+With no block ranges the pages run spatial projection (and the configured
+classifier). Any per-page `block_offset/count` or a document-level block
+range makes those blocks the Markdown structure, including `merged_table`
+cells with `colspan`/`rowspan`; `images` and per-page complexity are
+forwarded on that path. Annotations, form fields, structure trees (absolute
+`parent_index`, parents first), vector graphics, and content bounds are
+accepted when the page's `HAS_*` flag is set. Unknown `flags` bits and
+non-finite floats in any record are `LITEPARSE_STATUS_INVALID_ARGUMENT`.
+`max_pages` truncates the
+supplied list and drops document-level blocks when it does. `crop_box` and
+`skip_diagonal_text` apply before projection, matching `document_parse`.
 
 ## OCR callback
 
 `liteparse_parser_set_ocr_callback` installs an in-process OCR engine. The
-callback receives a page raster (RGB, or grayscale when registered with
-`prefers_grayscale`) and submits words through `liteparse_ocr_sink_add` or
-`liteparse_ocr_sink_add_batch`; on failure it records a message with
-`liteparse_ocr_sink_set_error` and returns nonzero. It may run concurrently on
-worker threads and must be thread-safe, non-unwinding, and valid for the
+callback receives a `LiteParseOcrImage` (RGB, or grayscale when registered
+with `LITEPARSE_OCR_FLAG_PREFERS_GRAYSCALE`) and submits `LiteParseOcrWord`s
+through `liteparse_ocr_sink_add`; on failure it records a message with
+`liteparse_ocr_sink_set_error` and returns nonzero. It may run concurrently
+on worker threads and must be thread-safe, non-unwinding, and valid for the
 parser's lifetime. Documents opened before a callback change keep the engine
 they were opened with.
 
@@ -232,4 +245,6 @@ they were opened with.
 `cargo test -p liteparse-c` runs the Rust-side ABI tests and, when a C
 compiler is on `PATH`, compiles `tests/header_smoke.c` with
 `-std=c11 -Wall -Wextra -Werror -pedantic` against the checked-in header and
-runs it on the fixtures in `integration_tests_data/`.
+runs it on the fixtures in `integration_tests_data/`. Set
+`LITEPARSE_REQUIRE_SMOKE=1` to fail instead of skipping when either is
+missing.

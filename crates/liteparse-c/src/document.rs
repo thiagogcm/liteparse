@@ -5,23 +5,23 @@ use liteparse::ocr::OcrEngine;
 use liteparse::ocr_merge::PageComplexityStats;
 use liteparse::types::{OutlineTarget, PdfInput};
 use liteparse::{GlyphResolver, LiteParseConfig as CoreConfig, ParseResult};
-use liteparse_pdfium::Library;
+use liteparse_pdfium::{Document, Library};
 
-use crate::complexity::{ComplexityState, LiteParseComplexityNew};
-use crate::extract::{LiteParseExtractNew, extract_pages};
+use crate::complexity::{ComplexityState, LiteParseComplexity};
+use crate::extract::extract_pages;
 use crate::handle::{
-    LiteParseByteView, as_slice, build_handle, copy_array, free_handle, opaque_handles,
-    required_view_str, slice_out, state_ref,
+    LiteParseByteView, array_ptr, as_slice, copy_array, create_handle, free_handle, opaque_handles,
+    required_view_str, state_ref, view_of, view_state,
 };
-use crate::page_objects::{LiteParsePageObjectsNew, extract_page_objects};
+use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, ParserState, build_parser};
-use crate::raw_text::{LiteParseRawTextNew, extract_raw_text};
-use crate::render::{RenderRequest, load_document, render_pages};
-use crate::result::{LiteParseResultNew, ResultState};
+use crate::raw_text::{LiteParseRawText, extract_raw_text};
+use crate::records::{DescriptiveInfo, LiteParseOutlineEntry, views};
+use crate::render::{RenderRequest, load_document, page_facts, render_pages};
+use crate::result::{LiteParseResult, PageGeometries, ResultState};
 use crate::runtime::block_on;
-use crate::screenshots::{LiteParseScreenshotsNew, ScreenshotsState};
+use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
 use crate::status::{FfiError, FfiResult, LiteParseStatus};
-use crate::views::{LiteParseOutlineEntry, views};
 
 /// Page region in top-left-origin viewport points. Must fit within the page.
 #[repr(C)]
@@ -33,14 +33,25 @@ pub struct LiteParseRenderRegion {
     pub height: f32,
 }
 
-unsafe fn copy_page_numbers(pages: *const u32, len: usize) -> FfiResult<Option<Vec<u32>>> {
-    Ok(unsafe { copy_array(pages, len, "pages") }?.filter(|pages| !pages.is_empty()))
+/// `LiteParseDocumentInfo.flags` bit: the source was converted to PDF (an
+/// office document or image).
+pub const LITEPARSE_DOCUMENT_FLAG_CONVERTED: u32 = 1 << 0;
+
+/// Facts recorded when a document is opened. Borrowed until the document is
+/// freed.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseDocumentInfo {
+    pub total_pages: u32,
+    /// `LITEPARSE_DOCUMENT_FLAG_*` bits.
+    pub flags: u32,
+    /// Bookmarks, walked once at open.
+    pub outline: *const LiteParseOutlineEntry,
+    pub outline_len: usize,
 }
 
-unsafe fn copy_input_bytes(data: *const u8, len: usize) -> FfiResult<Vec<u8>> {
-    Ok(unsafe { as_slice(data, len, "data") }?
-        .unwrap_or_default()
-        .to_vec())
+unsafe fn copy_page_numbers(pages: *const u32, len: usize) -> FfiResult<Option<Vec<u32>>> {
+    Ok(unsafe { copy_array(pages, len, "pages") }?.filter(|pages| !pages.is_empty()))
 }
 
 const MAX_SELECTED_PAGES: usize = 100_000;
@@ -49,13 +60,6 @@ const MAX_SELECTED_PAGES: usize = 100_000;
 /// concurrently on one handle; destruction must wait for them.
 pub struct LiteParseDocument {
     _opaque: [u8; 0],
-}
-
-/// The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseDocumentNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseDocument,
 }
 
 opaque_handles! {
@@ -70,23 +74,24 @@ pub(crate) struct DocumentState {
     pub(crate) input: PdfInput,
     guard: PdfInputGuard,
     total_pages: u32,
+    /// Owns the titles `outline_entries` borrow.
+    #[allow(dead_code)]
     outline: Vec<OutlineTarget>,
-    outline_views: OnceLock<Vec<LiteParseOutlineEntry>>,
+    /// Backing storage for `info`.
+    #[allow(dead_code)]
+    outline_entries: Vec<LiteParseOutlineEntry>,
+    info: LiteParseDocumentInfo,
     /// From the source PDF at open; absent for converted inputs.
     descriptive: Option<DescriptiveInfo>,
+    /// Per-page geometry after orientation corrections, indexed by page
+    /// number - 1. Filled on first use; the document is reopened at most once.
+    geometries: OnceLock<PageGeometries>,
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct DescriptiveInfo {
-    pub(crate) title: Option<String>,
-    pub(crate) author: Option<String>,
-    pub(crate) subject: Option<String>,
-    pub(crate) keywords: Option<String>,
-    pub(crate) trapped: Option<String>,
-}
+view_state!(DocumentState => LiteParseDocumentInfo, info);
 
 impl DescriptiveInfo {
-    fn read(document: &liteparse_pdfium::Document<'_>) -> Self {
+    fn read(document: &Document<'_>) -> Self {
         Self {
             title: document.meta_text("Title"),
             author: document.meta_text("Author"),
@@ -96,15 +101,6 @@ impl DescriptiveInfo {
         }
     }
 }
-
-// SAFETY: cached pointers target immutable `outline` storage owned by this state.
-unsafe impl Send for DocumentState {}
-unsafe impl Sync for DocumentState {}
-
-const _: () = {
-    const fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<DocumentState>();
-};
 
 impl DocumentState {
     fn open(parser: &ParserState, input: PdfInput) -> FfiResult<Self> {
@@ -121,6 +117,17 @@ impl DocumentState {
                 want_descriptive.then(|| DescriptiveInfo::read(&document)),
             )
         };
+        let outline_entries: Vec<LiteParseOutlineEntry> = views(&outline);
+        let info = LiteParseDocumentInfo {
+            total_pages,
+            flags: if guard.is_converted() {
+                LITEPARSE_DOCUMENT_FLAG_CONVERTED
+            } else {
+                0
+            },
+            outline: array_ptr(&outline_entries),
+            outline_len: outline_entries.len(),
+        };
         Ok(Self {
             config,
             glyph_resolver: parser.glyph_resolver(),
@@ -129,8 +136,10 @@ impl DocumentState {
             guard,
             total_pages,
             outline,
-            outline_views: OnceLock::new(),
+            outline_entries,
+            info,
             descriptive,
+            geometries: OnceLock::new(),
         })
     }
 
@@ -193,94 +202,96 @@ impl DocumentState {
     ) -> FfiResult<ScreenshotsState> {
         let request = RenderRequest::from_config(&self.config, dpi_override, region)?;
         let pages = self.selection(pages)?;
-        render_pages(
-            &self.input,
-            pages.as_deref(),
-            &request,
-            &self.config.page_orientation_corrections,
-        )
-        .map(ScreenshotsState::new)
+        render_pages(&self.input, pages.as_deref(), &request, &self.config)
+            .map(ScreenshotsState::new)
     }
 
-    /// Resolve page geometries for a parse result by reopening the input
-    /// through PDFium and applying the configured orientation corrections, so
-    /// the reported box/user-unit/rotation matches the corrected pages the
-    /// core parser saw. No core field required.
-    fn result_geometries(
-        &self,
-        result: &ParseResult,
-    ) -> Vec<crate::views::LiteParsePageGeometryValue> {
-        let lib = Library::init();
-        let Ok(document) = load_document(&lib, &self.input, self.config.password.as_deref()) else {
-            return vec![crate::views::LiteParsePageGeometryValue::default(); result.pages.len()];
-        };
-        if liteparse::extract::apply_page_orientation_corrections(
-            &document,
-            &self.config.page_orientation_corrections,
-        )
-        .is_err()
-        {
-            return vec![crate::views::LiteParsePageGeometryValue::default(); result.pages.len()];
-        }
-        result
-            .pages
-            .iter()
-            .map(|page| {
-                let geometry = document
-                    .page(page.page_number as i32 - 1)
-                    .ok()
-                    .as_ref()
-                    .and_then(crate::views::LiteParsePageGeometry::from_pdfium);
-                geometry
-                    .map(|geometry| crate::views::LiteParsePageGeometryValue {
-                        geometry,
-                        present: true,
+    /// Geometry of every page, read from `document` (already corrected) or
+    /// from a fresh corrected open when no document is at hand.
+    pub(crate) fn geometries(&self, document: Option<&Document<'_>>) -> &PageGeometries {
+        self.geometries.get_or_init(|| {
+            let read = |document: &Document<'_>| {
+                (0..self.total_pages as i32)
+                    .map(|index| {
+                        document
+                            .page(index)
+                            .ok()
+                            .map(|page| page_facts(&page).geometry)
                     })
-                    .unwrap_or_default()
-            })
-            .collect()
+                    .map(Option::flatten)
+                    .collect()
+            };
+            if let Some(document) = document {
+                return read(document);
+            }
+            let lib = Library::init();
+            let opened = load_document(&lib, &self.input, self.config.password.as_deref())
+                .and_then(|document| {
+                    liteparse::extract::apply_page_orientation_corrections(
+                        &document,
+                        &self.config.page_orientation_corrections,
+                    )?;
+                    Ok(document)
+                });
+            match opened {
+                Ok(document) => read(&document),
+                Err(_) => vec![None; self.total_pages as usize],
+            }
+        })
     }
 
-    fn outline_views(&self) -> &[LiteParseOutlineEntry] {
-        self.outline_views.get_or_init(|| views(&self.outline))
+    /// Geometries parallel to `page_numbers` (1-based).
+    pub(crate) fn geometries_for(
+        &self,
+        document: Option<&Document<'_>>,
+        page_numbers: impl Iterator<Item = usize>,
+    ) -> PageGeometries {
+        let all = self.geometries(document);
+        page_numbers
+            .map(|number| all.get(number.wrapping_sub(1)).copied().flatten())
+            .collect()
     }
 }
 
 /// Open a path, converting non-PDF input once for the document's lifetime.
 ///
-/// # Safety
-///
-/// `parser` must be live and `path` readable UTF-8.
+/// `parser` must be live, `path` readable UTF-8, and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_open_path(
     parser: *const LiteParseParser,
     path: LiteParseByteView,
-) -> LiteParseDocumentNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let parser = state_ref(parser)?;
-        let path = required_view_str(path, "path")?;
-        DocumentState::open(parser, PdfInput::Path(path))
-    });
-    LiteParseDocumentNew { status, handle }
+    out: *mut *mut LiteParseDocument,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let parser = state_ref(parser)?;
+            let path = required_view_str(path, "path")?;
+            DocumentState::open(parser, PdfInput::Path(path))
+        })
+    }
 }
 
-/// Open and copy in-memory input. Prefer paths for large documents.
+/// Open and copy in-memory input. Prefer paths for large documents: bytes
+/// are copied at open and again per parse.
 ///
-/// # Safety
-///
-/// `parser` must be live; `data` must be readable, or null with zero length.
+/// `parser` must be live; `data` must be readable, or null with zero
+/// length; `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_open_bytes(
     parser: *const LiteParseParser,
     data: *const u8,
     data_len: usize,
-) -> LiteParseDocumentNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let parser = state_ref(parser)?;
-        let bytes = copy_input_bytes(data, data_len)?;
-        DocumentState::open(parser, PdfInput::Bytes(bytes))
-    });
-    LiteParseDocumentNew { status, handle }
+    out: *mut *mut LiteParseDocument,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let parser = state_ref(parser)?;
+            let bytes = as_slice(data, data_len, "data")?
+                .unwrap_or_default()
+                .to_vec();
+            DocumentState::open(parser, PdfInput::Bytes(bytes))
+        })
+    }
 }
 
 /// Destroy a document handle. Null is allowed.
@@ -289,79 +300,79 @@ pub unsafe extern "C" fn liteparse_document_free(document: *mut LiteParseDocumen
     unsafe { free_handle(document) };
 }
 
-/// Return the source page count recorded at open.
+/// Borrow the facts recorded at open; null for a null handle.
 ///
-/// # Safety
-///
-/// `document` must be live.
+/// `document` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_document_total_pages(document: *const LiteParseDocument) -> u32 {
-    unsafe { state_ref(document) }.map_or(0, |state| state.total_pages)
-}
-
-/// Return whether the source was converted to PDF.
-///
-/// # Safety
-///
-/// `document` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_document_is_converted(
+pub unsafe extern "C" fn liteparse_document_info(
     document: *const LiteParseDocument,
-) -> bool {
-    unsafe { state_ref(document) }.is_ok_and(|state| state.guard.is_converted())
+) -> *const LiteParseDocumentInfo {
+    unsafe { view_of(document) }
 }
 
-/// Borrow the document outline.
+/// Parse 1-based pages; null with zero length selects all. Selections are
+/// validated against the page count, de-duplicated, and processed in
+/// ascending order. `max_pages` caps either form.
 ///
-/// # Safety
-///
-/// `document` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_document_outline(
-    document: *const LiteParseDocument,
-    out_len: *mut usize,
-) -> *const LiteParseOutlineEntry {
-    unsafe { slice_out(out_len, || Ok(Some(state_ref(document)?.outline_views()))) }
-}
-
-/// Parse sorted, unique, 1-based pages. Null with zero length selects all.
-///
-/// # Safety
-///
-/// `document` must be live and `pages` readable, or null with zero length.
+/// `document` must be live, `pages` readable or null with zero length, and
+/// `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_parse(
     document: *const LiteParseDocument,
     pages: *const u32,
     pages_len: usize,
-) -> LiteParseResultNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        let result = state.parse(pages)?;
-        let descriptive = result
-            .doc_meta
-            .is_some()
-            .then(|| state.descriptive.clone())
-            .flatten();
-        let geometries = state.result_geometries(&result);
-        Ok(ResultState::new(
-            result,
-            state.config.extract_text_metadata,
-            state.config.dpi,
-            descriptive,
-            geometries,
-        ))
-    });
-    LiteParseResultNew { status, handle }
+    out: *mut *mut LiteParseResult,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = copy_page_numbers(pages, pages_len)?;
+            let result = state.parse(pages)?;
+            let descriptive = result
+                .doc_meta
+                .is_some()
+                .then(|| state.descriptive.clone())
+                .flatten();
+            let geometries =
+                state.geometries_for(None, result.pages.iter().map(|page| page.page_number));
+            Ok(ResultState::parsed(
+                result,
+                &state.config,
+                descriptive,
+                geometries,
+            ))
+        })
+    }
 }
 
-/// Render selected pages to PNG. Zero DPI uses the configured value; region
-/// rectangles are clipped and made region-relative.
+/// Extract pre-projection pages: heuristic text items, graphics, and the
+/// configured extras, with no projection, OCR, text, or Markdown. Link
+/// stamping and word boxes follow the same rules as parse (links only under
+/// Markdown; word boxes when requested or under Markdown). Feed the view's
+/// `content` to `liteparse_parser_parse_content` to project and classify.
 ///
-/// # Safety
+/// See `liteparse_document_parse`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_document_extract(
+    document: *const LiteParseDocument,
+    pages: *const u32,
+    pages_len: usize,
+    out: *mut *mut LiteParseResult,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = state.selection(copy_page_numbers(pages, pages_len)?)?;
+            extract_pages(state, pages)
+        })
+    }
+}
+
+/// Render selected pages to PNG. Zero DPI uses the configured value. A
+/// non-null `region` crops each page; detected rectangles are then clipped
+/// and made region-relative. The whole page is rasterized before cropping.
 ///
-/// `document` must be live; non-null inputs must be readable.
+/// `document` must be live; non-null inputs must be readable; `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_screenshot(
     document: *const LiteParseDocument,
@@ -369,105 +380,76 @@ pub unsafe extern "C" fn liteparse_document_screenshot(
     pages_len: usize,
     dpi_override: f32,
     region: *const LiteParseRenderRegion,
-) -> LiteParseScreenshotsNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        state.screenshot(pages, dpi_override, region.as_ref().copied())
-    });
-    LiteParseScreenshotsNew { status, handle }
+    out: *mut *mut LiteParseScreenshots,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = copy_page_numbers(pages, pages_len)?;
+            state.screenshot(pages, dpi_override, region.as_ref().copied())
+        })
+    }
 }
 
-/// Compute complexity for selected pages; null with zero length selects all.
+/// Compute pre-OCR complexity signals for selected pages.
 ///
-/// # Safety
-///
-/// `document` must be live and `pages` readable, or null with zero length.
+/// See `liteparse_document_parse`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_complexity(
     document: *const LiteParseDocument,
     pages: *const u32,
     pages_len: usize,
-) -> LiteParseComplexityNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        state.complexity(pages).map(ComplexityState::new)
-    });
-    LiteParseComplexityNew { status, handle }
+    out: *mut *mut LiteParseComplexity,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = copy_page_numbers(pages, pages_len)?;
+            state.complexity(pages).map(ComplexityState::new)
+        })
+    }
 }
 
-/// Extract heuristic-free text runs for selected pages. Null with zero
-/// length selects all. `max_pages` caps either. No projection, OCR, or
-/// Markdown — every pdfium glyph lands in exactly one item.
+/// Extract heuristic-free PDFium text runs: no gap merge, projection, OCR,
+/// or Markdown; every glyph lands in exactly one item.
 ///
-/// # Safety
-///
-/// `document` must be live and `pages` readable, or null with zero length.
+/// See `liteparse_document_parse`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_raw_text(
     document: *const LiteParseDocument,
     pages: *const u32,
     pages_len: usize,
-) -> LiteParseRawTextNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        let pages = state.selection(pages)?;
-        extract_raw_text(state, pages)
-    });
-    LiteParseRawTextNew { status, handle }
+    out: *mut *mut LiteParseRawText,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = state.selection(copy_page_numbers(pages, pages_len)?)?;
+            extract_raw_text(state, pages)
+        })
+    }
 }
 
-/// Extract pre-projection pages for selected pages. Null with zero length
-/// selects all. `max_pages` caps either. No grid projection, OCR, or
-/// Markdown. Link stamping and word boxes follow the same rules as parse
-/// (links only when Markdown is requested; word boxes when requested or
-/// Markdown). Feed `liteparse_extract_as_content` into
-/// `liteparse_parser_parse_content` to project and classify. That path
-/// applies crop_box and skip_diagonal_text.
+/// Snapshot unfiltered page content objects: kinds, matrices, PDFium y-up
+/// bounds, form children, path segments, and image metadata. No size
+/// filters, viewport transforms, or form-matrix composition. `flags` is a
+/// mask of `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_*`; unknown bits are
+/// `LITEPARSE_STATUS_INVALID_ARGUMENT`.
 ///
-/// # Safety
-///
-/// `document` must be live and `pages` readable, or null with zero length.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_document_extract(
-    document: *const LiteParseDocument,
-    pages: *const u32,
-    pages_len: usize,
-) -> LiteParseExtractNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        let pages = state.selection(pages)?;
-        extract_pages(state, pages)
-    });
-    LiteParseExtractNew { status, handle }
-}
-
-/// Snapshot unfiltered page content objects. Null with zero length selects
-/// all. `max_pages` caps either. Geometry is left in the space pdfium
-/// reports (object matrix applied, ancestor form matrices not). Form
-/// children are packed as contiguous ranges so the host composes matrices
-/// and chooses which forms to descend. Image payloads are omitted unless
-/// `flags` requests them with `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_*`.
-/// Unknown flag bits are `LITEPARSE_STATUS_INVALID_ARGUMENT`.
-///
-/// # Safety
-///
-/// `document` must be live and `pages` readable, or null with zero length.
+/// See `liteparse_document_parse`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_page_objects(
     document: *const LiteParseDocument,
     pages: *const u32,
     pages_len: usize,
     flags: u32,
-) -> LiteParsePageObjectsNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let state = state_ref(document)?;
-        let pages = copy_page_numbers(pages, pages_len)?;
-        let pages = state.selection(pages)?;
-        extract_page_objects(state, pages, flags)
-    });
-    LiteParsePageObjectsNew { status, handle }
+    out: *mut *mut LiteParsePageObjects,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            let pages = state.selection(copy_page_numbers(pages, pages_len)?)?;
+            extract_page_objects(state, pages, flags)
+        })
+    }
 }

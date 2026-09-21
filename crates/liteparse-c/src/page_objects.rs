@@ -1,17 +1,15 @@
-use liteparse_pdfium::{
-    BitmapFormat, Color, Library, PageObject, PageObjectKind, RectF, SegmentKind,
-};
+use liteparse_pdfium::{BitmapFormat, Color, Library, PageObject, PageObjectKind, SegmentKind};
 
 use crate::document::DocumentState;
 use crate::handle::{
-    LiteParseByteView, bytes_view, free_handle, opaque_handles, optional_str_view, slice_out,
-    state_ref,
+    LiteParseByteView, array_ptr, bytes_view, free_handle, opaque_handles, optional_str_view,
+    packed_len, view_of, view_state,
 };
-use crate::render::load_document;
-use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR, LiteParseStatus};
-use crate::views::LiteParsePageGeometry;
+use crate::records::{LiteParsePageGeometry, flag_bits};
+use crate::render::{load_document, map_pages, page_facts};
+use crate::status::{FfiError, FfiResult};
 
-/// Values for `LiteParsePageObject.kind`.
+/// `LiteParsePageObject.kind` values.
 pub const LITEPARSE_PAGE_OBJECT_TEXT: u32 = 0;
 pub const LITEPARSE_PAGE_OBJECT_PATH: u32 = 1;
 pub const LITEPARSE_PAGE_OBJECT_IMAGE: u32 = 2;
@@ -19,13 +17,27 @@ pub const LITEPARSE_PAGE_OBJECT_SHADING: u32 = 3;
 pub const LITEPARSE_PAGE_OBJECT_FORM: u32 = 4;
 pub const LITEPARSE_PAGE_OBJECT_UNKNOWN: u32 = 5;
 
-/// Values for `LiteParsePathSegment.kind`.
+/// `LiteParsePageObject.flags` bits.
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_MATRIX: u32 = 1 << 0;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_BOUNDS: u32 = 1 << 1;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_DRAW_MODE: u32 = 1 << 2;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_PATH_FILLED: u32 = 1 << 3;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_PATH_STROKED: u32 = 1 << 4;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_WIDTH: u32 = 1 << 5;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_FILL_COLOR: u32 = 1 << 6;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_COLOR: u32 = 1 << 7;
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_IMAGE_METADATA: u32 = 1 << 8;
+
+/// `LiteParsePathSegment.kind` values.
 pub const LITEPARSE_PATH_SEGMENT_UNKNOWN: u32 = 0;
 pub const LITEPARSE_PATH_SEGMENT_MOVETO: u32 = 1;
 pub const LITEPARSE_PATH_SEGMENT_LINETO: u32 = 2;
 pub const LITEPARSE_PATH_SEGMENT_BEZIERTO: u32 = 3;
+/// `LiteParsePathSegment.flags` bits.
+pub const LITEPARSE_PATH_SEGMENT_FLAG_CLOSE: u32 = 1 << 0;
+pub const LITEPARSE_PATH_SEGMENT_FLAG_HAS_POINT: u32 = 1 << 1;
 
-/// Values for `LiteParsePageObject.bitmap_format`.
+/// `LiteParsePageObject.bitmap_format` values.
 pub const LITEPARSE_BITMAP_FORMAT_UNKNOWN: u32 = 0;
 pub const LITEPARSE_BITMAP_FORMAT_GRAY: u32 = 1;
 pub const LITEPARSE_BITMAP_FORMAT_BGR: u32 = 2;
@@ -33,32 +45,31 @@ pub const LITEPARSE_BITMAP_FORMAT_BGRX: u32 = 3;
 pub const LITEPARSE_BITMAP_FORMAT_BGRA: u32 = 4;
 pub const LITEPARSE_BITMAP_FORMAT_BGRA_PREMUL: u32 = 5;
 
-/// Copy the image stream as stored (`FPDFImageObj_GetImageDataRaw`).
+/// `liteparse_document_page_objects` flag: copy the image stream as stored
+/// (`FPDFImageObj_GetImageDataRaw`).
 pub const LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_RAW: u32 = 1 << 0;
-/// Copy the stream after lossless filters (`FPDFImageObj_GetImageDataDecoded`).
+/// Flag: copy the stream after lossless filters
+/// (`FPDFImageObj_GetImageDataDecoded`).
 pub const LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_DECODED: u32 = 1 << 1;
-/// Copy the image's own pixels (`FPDFImageObj_GetBitmap`), not matrix-rendered.
+/// Flag: copy the image's own pixels (`FPDFImageObj_GetBitmap`), not
+/// matrix-rendered.
 pub const LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_BITMAP: u32 = 1 << 2;
 
 const IMAGE_PAYLOAD_FLAGS: u32 = LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_RAW
     | LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_DECODED
     | LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_BITMAP;
 
+/// `LiteParsePageObjectPage.flags` bits.
+pub const LITEPARSE_OBJECT_PAGE_FLAG_HAS_GEOMETRY: u32 = 1 << 0;
+pub const LITEPARSE_OBJECT_PAGE_FLAG_HAS_ROTATION: u32 = 1 << 1;
+
 /// Form XObject nesting beyond this is recorded as the form object with an
-/// empty child range. High enough that hosts see the tree; not a liteparse
-/// layout policy.
+/// empty child range.
 const MAX_FORM_DEPTH: usize = 32;
 
-/// Unfiltered page content objects. Views borrow from this handle.
+/// Unfiltered page content objects. Views borrow from the handle.
 pub struct LiteParsePageObjects {
     _opaque: [u8; 0],
-}
-
-/// The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParsePageObjectsNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParsePageObjects,
 }
 
 opaque_handles! {
@@ -88,49 +99,55 @@ pub struct LiteParsePdfBounds {
     pub top: f32,
 }
 
-/// One extracted page. `page_label` borrows from the handle.
-/// `object_offset/count` indexes `liteparse_page_objects_objects` for
-/// top-level content objects.
+/// One extracted page. `object_offset/count` index the view's `objects`
+/// for top-level content objects.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParsePageObjectPage {
-    pub page_number: u32,
-    pub page_label: LiteParseByteView,
-    pub page_width: f32,
-    pub page_height: f32,
+    pub label: LiteParseByteView,
     pub geometry: LiteParsePageGeometry,
-    pub object_offset: usize,
-    pub object_count: usize,
-    pub has_geometry: bool,
+    pub page_number: u32,
+    /// `LITEPARSE_OBJECT_PAGE_FLAG_*` bits.
+    pub flags: u32,
+    pub width: f32,
+    pub height: f32,
+    pub object_offset: u32,
+    pub object_count: u32,
 }
 
 /// One path segment in the object's own coordinate space.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParsePathSegment {
-    /// `LITEPARSE_PATH_SEGMENT_*`. Meaningful when `has_kind` is true.
+    /// `LITEPARSE_PATH_SEGMENT_*`.
     pub kind: u32,
+    /// `LITEPARSE_PATH_SEGMENT_FLAG_*` bits.
+    pub flags: u32,
     pub x: f32,
     pub y: f32,
-    pub close: bool,
-    pub has_kind: bool,
-    pub has_point: bool,
 }
 
-/// One content object. Path segments and image filter names are offset/count
-/// ranges into the handle's shared arrays. Image payload views borrow here.
+/// One content object. Ranges index the view's `objects` (direct Form
+/// XObject children), `segments`, and `filters` arrays. Image payloads are
+/// null unless requested.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParsePageObject {
-    /// `LITEPARSE_PAGE_OBJECT_*`.
-    pub kind: u32,
+    pub image_raw: LiteParseByteView,
+    pub image_decoded: LiteParseByteView,
+    pub image_bitmap: LiteParseByteView,
     pub matrix: LiteParseMatrix,
     pub bounds: LiteParsePdfBounds,
-    /// Direct Form XObject children in `liteparse_page_objects_objects`.
-    pub child_offset: usize,
-    pub child_count: usize,
-    pub segment_offset: usize,
-    pub segment_count: usize,
+    /// `LITEPARSE_PAGE_OBJECT_*`.
+    pub kind: u32,
+    /// `LITEPARSE_PAGE_OBJECT_FLAG_*` bits.
+    pub flags: u32,
+    pub child_offset: u32,
+    pub child_count: u32,
+    pub segment_offset: u32,
+    pub segment_count: u32,
+    pub filter_offset: u32,
+    pub filter_count: u32,
     pub stroke_width: f32,
     /// Packed ARGB when the colour space is reportable as RGB.
     pub fill_color: u32,
@@ -144,56 +161,33 @@ pub struct LiteParsePageObject {
     pub image_colorspace: i32,
     /// `-1` when the image is not in marked content.
     pub image_marked_content_id: i32,
-    pub filter_offset: usize,
-    pub filter_count: usize,
-    pub image_raw: LiteParseByteView,
-    pub image_decoded: LiteParseByteView,
-    pub image_bitmap: LiteParseByteView,
     pub bitmap_width: i32,
     pub bitmap_height: i32,
     pub bitmap_stride: i32,
     /// `LITEPARSE_BITMAP_FORMAT_*`.
     pub bitmap_format: u32,
-    pub has_matrix: bool,
-    pub has_bounds: bool,
-    pub path_filled: bool,
-    pub path_stroked: bool,
-    pub has_draw_mode: bool,
-    pub has_stroke_width: bool,
-    pub has_fill_color: bool,
-    pub has_stroke_color: bool,
-    pub has_image_metadata: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParsePageObjectsView {
+    pub pages: *const LiteParsePageObjectPage,
+    pub pages_len: usize,
+    pub objects: *const LiteParsePageObject,
+    pub objects_len: usize,
+    pub segments: *const LiteParsePathSegment,
+    pub segments_len: usize,
+    pub filters: *const LiteParseByteView,
+    pub filters_len: usize,
 }
 
 struct OwnedObject {
-    kind: u32,
-    matrix: Option<LiteParseMatrix>,
-    bounds: Option<LiteParsePdfBounds>,
-    child_offset: usize,
-    child_count: usize,
+    record: LiteParsePageObject,
     segments: Vec<LiteParsePathSegment>,
-    stroke_width: Option<f32>,
-    fill_color: Option<u32>,
-    stroke_color: Option<u32>,
-    path_filled: bool,
-    path_stroked: bool,
-    has_draw_mode: bool,
-    image_width: u32,
-    image_height: u32,
-    image_horizontal_dpi: f32,
-    image_vertical_dpi: f32,
-    image_bits_per_pixel: u32,
-    image_colorspace: i32,
-    image_marked_content_id: i32,
-    has_image_metadata: bool,
     filters: Vec<String>,
     image_raw: Vec<u8>,
     image_decoded: Vec<u8>,
     image_bitmap: Vec<u8>,
-    bitmap_width: i32,
-    bitmap_height: i32,
-    bitmap_stride: i32,
-    bitmap_format: u32,
 }
 
 struct OwnedPage {
@@ -201,131 +195,102 @@ struct OwnedPage {
     page_label: Option<String>,
     page_width: f32,
     page_height: f32,
-    geometry: Option<crate::views::LiteParsePageGeometry>,
+    geometry: Option<(LiteParsePageGeometry, bool)>,
     object_offset: usize,
     object_count: usize,
 }
 
 pub(crate) struct PageObjectsState {
-    pages: Vec<OwnedPage>,
-    page_views: Vec<LiteParsePageObjectPage>,
+    /// Owns the strings and image payloads the records borrow.
+    #[allow(dead_code)]
+    source: (Vec<OwnedPage>, Vec<OwnedObject>),
+    /// Backing storage for `view`.
+    #[allow(dead_code)]
+    pages: Vec<LiteParsePageObjectPage>,
+    #[allow(dead_code)]
     objects: Vec<LiteParsePageObject>,
+    #[allow(dead_code)]
     segments: Vec<LiteParsePathSegment>,
-    filter_strings: Vec<String>,
-    filter_views: Vec<LiteParseByteView>,
-    image_raw: Vec<Vec<u8>>,
-    image_decoded: Vec<Vec<u8>>,
-    image_bitmap: Vec<Vec<u8>>,
+    #[allow(dead_code)]
+    filters: Vec<LiteParseByteView>,
+    view: LiteParsePageObjectsView,
 }
 
-impl PageObjectsState {
-    fn pack(pages: Vec<OwnedPage>, owned_objects: Vec<OwnedObject>) -> Self {
-        let mut segments = Vec::new();
-        let mut filter_strings = Vec::new();
-        let mut image_raw = Vec::with_capacity(owned_objects.len());
-        let mut image_decoded = Vec::with_capacity(owned_objects.len());
-        let mut image_bitmap = Vec::with_capacity(owned_objects.len());
-        let mut objects = Vec::with_capacity(owned_objects.len());
+view_state!(PageObjectsState => LiteParsePageObjectsView, view);
 
-        for object in owned_objects {
+impl PageObjectsState {
+    fn pack(owned_pages: Vec<OwnedPage>, owned_objects: Vec<OwnedObject>) -> Self {
+        let mut segments = Vec::new();
+        let mut filters = Vec::new();
+        let mut objects = Vec::with_capacity(owned_objects.len());
+        for object in &owned_objects {
             let segment_offset = segments.len();
-            let segment_count = object.segments.len();
-            segments.extend(object.segments);
-            let filter_offset = filter_strings.len();
-            let filter_count = object.filters.len();
-            filter_strings.extend(object.filters);
-            image_raw.push(object.image_raw);
-            image_decoded.push(object.image_decoded);
-            image_bitmap.push(object.image_bitmap);
+            segments.extend_from_slice(&object.segments);
+            let filter_offset = filters.len();
+            filters.extend(
+                object
+                    .filters
+                    .iter()
+                    .map(|name| bytes_view(name.as_bytes())),
+            );
+            let payload = |bytes: &Vec<u8>| {
+                if bytes.is_empty() {
+                    LiteParseByteView::default()
+                } else {
+                    bytes_view(bytes)
+                }
+            };
             objects.push(LiteParsePageObject {
-                kind: object.kind,
-                matrix: object.matrix.unwrap_or_default(),
-                bounds: object.bounds.unwrap_or_default(),
-                child_offset: object.child_offset,
-                child_count: object.child_count,
-                segment_offset,
-                segment_count,
-                stroke_width: object.stroke_width.unwrap_or(0.0),
-                fill_color: object.fill_color.unwrap_or(0),
-                stroke_color: object.stroke_color.unwrap_or(0),
-                image_width: object.image_width,
-                image_height: object.image_height,
-                image_horizontal_dpi: object.image_horizontal_dpi,
-                image_vertical_dpi: object.image_vertical_dpi,
-                image_bits_per_pixel: object.image_bits_per_pixel,
-                image_colorspace: object.image_colorspace,
-                image_marked_content_id: object.image_marked_content_id,
-                filter_offset,
-                filter_count,
-                image_raw: LiteParseByteView::default(),
-                image_decoded: LiteParseByteView::default(),
-                image_bitmap: LiteParseByteView::default(),
-                bitmap_width: object.bitmap_width,
-                bitmap_height: object.bitmap_height,
-                bitmap_stride: object.bitmap_stride,
-                bitmap_format: object.bitmap_format,
-                has_matrix: object.matrix.is_some(),
-                has_bounds: object.bounds.is_some(),
-                path_filled: object.path_filled,
-                path_stroked: object.path_stroked,
-                has_draw_mode: object.has_draw_mode,
-                has_stroke_width: object.stroke_width.is_some(),
-                has_fill_color: object.fill_color.is_some(),
-                has_stroke_color: object.stroke_color.is_some(),
-                has_image_metadata: object.has_image_metadata,
+                image_raw: payload(&object.image_raw),
+                image_decoded: payload(&object.image_decoded),
+                image_bitmap: payload(&object.image_bitmap),
+                segment_offset: packed_len(segment_offset),
+                segment_count: packed_len(object.segments.len()),
+                filter_offset: packed_len(filter_offset),
+                filter_count: packed_len(object.filters.len()),
+                ..object.record
             });
         }
-
-        let mut state = Self {
-            pages,
-            page_views: Vec::new(),
-            objects,
-            segments,
-            filter_strings,
-            filter_views: Vec::new(),
-            image_raw,
-            image_decoded,
-            image_bitmap,
-        };
-        state.filter_views = state
-            .filter_strings
-            .iter()
-            .map(|name| bytes_view(name.as_bytes()))
-            .collect();
-        for index in 0..state.objects.len() {
-            state.objects[index].image_raw = payload_view(&state.image_raw[index]);
-            state.objects[index].image_decoded = payload_view(&state.image_decoded[index]);
-            state.objects[index].image_bitmap = payload_view(&state.image_bitmap[index]);
-        }
-        state.page_views = state
-            .pages
+        let pages: Vec<LiteParsePageObjectPage> = owned_pages
             .iter()
             .map(|page| {
-                let (geometry, has_geometry) = page
-                    .geometry
-                    .map(|geometry| (geometry, true))
-                    .unwrap_or_default();
+                let (geometry, has_rotation) = page.geometry.unwrap_or_default();
                 LiteParsePageObjectPage {
-                    page_number: page.page_number,
-                    page_label: optional_str_view(page.page_label.as_deref()),
-                    page_width: page.page_width,
-                    page_height: page.page_height,
+                    label: optional_str_view(page.page_label.as_deref()),
                     geometry,
-                    object_offset: page.object_offset,
-                    object_count: page.object_count,
-                    has_geometry,
+                    page_number: page.page_number,
+                    flags: flag_bits(&[
+                        (
+                            page.geometry.is_some(),
+                            LITEPARSE_OBJECT_PAGE_FLAG_HAS_GEOMETRY,
+                        ),
+                        (has_rotation, LITEPARSE_OBJECT_PAGE_FLAG_HAS_ROTATION),
+                    ]),
+                    width: page.page_width,
+                    height: page.page_height,
+                    object_offset: packed_len(page.object_offset),
+                    object_count: packed_len(page.object_count),
                 }
             })
             .collect();
-        state
-    }
-}
-
-fn payload_view(value: &[u8]) -> LiteParseByteView {
-    if value.is_empty() {
-        LiteParseByteView::default()
-    } else {
-        bytes_view(value)
+        let view = LiteParsePageObjectsView {
+            pages: array_ptr(&pages),
+            pages_len: pages.len(),
+            objects: array_ptr(&objects),
+            objects_len: objects.len(),
+            segments: array_ptr(&segments),
+            segments_len: segments.len(),
+            filters: array_ptr(&filters),
+            filters_len: filters.len(),
+        };
+        Self {
+            source: (owned_pages, owned_objects),
+            pages,
+            objects,
+            segments,
+            filters,
+            view,
+        }
     }
 }
 
@@ -374,23 +339,24 @@ fn pack_object(object: &PageObject<'_, '_>, flags: u32) -> OwnedObject {
     let segments = (0..object.path_segment_count().unwrap_or(0))
         .filter_map(|index| object.path_segment(index))
         .map(|segment| {
-            let (kind, has_kind) = match segment.kind {
-                Some(SegmentKind::MoveTo) => (LITEPARSE_PATH_SEGMENT_MOVETO, true),
-                Some(SegmentKind::LineTo) => (LITEPARSE_PATH_SEGMENT_LINETO, true),
-                Some(SegmentKind::BezierTo) => (LITEPARSE_PATH_SEGMENT_BEZIERTO, true),
-                None => (LITEPARSE_PATH_SEGMENT_UNKNOWN, false),
+            let kind = match segment.kind {
+                Some(SegmentKind::MoveTo) => LITEPARSE_PATH_SEGMENT_MOVETO,
+                Some(SegmentKind::LineTo) => LITEPARSE_PATH_SEGMENT_LINETO,
+                Some(SegmentKind::BezierTo) => LITEPARSE_PATH_SEGMENT_BEZIERTO,
+                None => LITEPARSE_PATH_SEGMENT_UNKNOWN,
             };
-            let (x, y, has_point) = match segment.point {
-                Some((x, y)) => (x, y, true),
-                None => (0.0, 0.0, false),
-            };
+            let (x, y) = segment.point.unwrap_or_default();
             LiteParsePathSegment {
                 kind,
+                flags: flag_bits(&[
+                    (segment.close, LITEPARSE_PATH_SEGMENT_FLAG_CLOSE),
+                    (
+                        segment.point.is_some(),
+                        LITEPARSE_PATH_SEGMENT_FLAG_HAS_POINT,
+                    ),
+                ]),
                 x,
                 y,
-                close: segment.close,
-                has_kind,
-                has_point,
             }
         })
         .collect();
@@ -408,34 +374,51 @@ fn pack_object(object: &PageObject<'_, '_>, flags: u32) -> OwnedObject {
     } else {
         Vec::new()
     };
-    let mut image_bitmap = Vec::new();
-    let mut bitmap_width = 0;
-    let mut bitmap_height = 0;
-    let mut bitmap_stride = 0;
-    let mut bitmap_format_value = LITEPARSE_BITMAP_FORMAT_UNKNOWN;
-    if flags & LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_BITMAP != 0 {
-        if let Some(bitmap) = object.image_bitmap() {
-            image_bitmap = bitmap.buffer().to_vec();
-            bitmap_width = bitmap.width();
-            bitmap_height = bitmap.height();
-            bitmap_stride = bitmap.stride();
-            bitmap_format_value = bitmap_format(bitmap.format());
-        }
-    }
-
-    OwnedObject {
+    let bitmap = (flags & LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_BITMAP != 0)
+        .then(|| object.image_bitmap())
+        .flatten();
+    let stroke_width = object.stroke_width();
+    let fill_color = object.fill_color().map(pack_argb);
+    let stroke_color = object.stroke_color().map(pack_argb);
+    let record = LiteParsePageObject {
+        matrix: matrix.unwrap_or_default(),
+        bounds: bounds.unwrap_or_default(),
         kind: object_kind(object.kind()),
-        matrix,
-        bounds,
-        child_offset: 0,
-        child_count: 0,
-        segments,
-        stroke_width: object.stroke_width(),
-        fill_color: object.fill_color().map(pack_argb),
-        stroke_color: object.stroke_color().map(pack_argb),
-        path_filled: draw_mode.is_some_and(|mode| mode.filled),
-        path_stroked: draw_mode.is_some_and(|mode| mode.stroked),
-        has_draw_mode: draw_mode.is_some(),
+        flags: flag_bits(&[
+            (matrix.is_some(), LITEPARSE_PAGE_OBJECT_FLAG_HAS_MATRIX),
+            (bounds.is_some(), LITEPARSE_PAGE_OBJECT_FLAG_HAS_BOUNDS),
+            (
+                draw_mode.is_some(),
+                LITEPARSE_PAGE_OBJECT_FLAG_HAS_DRAW_MODE,
+            ),
+            (
+                draw_mode.is_some_and(|mode| mode.filled),
+                LITEPARSE_PAGE_OBJECT_FLAG_PATH_FILLED,
+            ),
+            (
+                draw_mode.is_some_and(|mode| mode.stroked),
+                LITEPARSE_PAGE_OBJECT_FLAG_PATH_STROKED,
+            ),
+            (
+                stroke_width.is_some(),
+                LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_WIDTH,
+            ),
+            (
+                fill_color.is_some(),
+                LITEPARSE_PAGE_OBJECT_FLAG_HAS_FILL_COLOR,
+            ),
+            (
+                stroke_color.is_some(),
+                LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_COLOR,
+            ),
+            (
+                metadata.is_some(),
+                LITEPARSE_PAGE_OBJECT_FLAG_HAS_IMAGE_METADATA,
+            ),
+        ]),
+        stroke_width: stroke_width.unwrap_or(0.0),
+        fill_color: fill_color.unwrap_or(0),
+        stroke_color: stroke_color.unwrap_or(0),
         image_width: metadata.map_or(0, |meta| meta.width),
         image_height: metadata.map_or(0, |meta| meta.height),
         image_horizontal_dpi: metadata.map_or(0.0, |meta| meta.horizontal_dpi),
@@ -443,15 +426,23 @@ fn pack_object(object: &PageObject<'_, '_>, flags: u32) -> OwnedObject {
         image_bits_per_pixel: metadata.map_or(0, |meta| meta.bits_per_pixel),
         image_colorspace: metadata.map_or(0, |meta| meta.colorspace),
         image_marked_content_id: metadata.map_or(0, |meta| meta.marked_content_id),
-        has_image_metadata: metadata.is_some(),
+        bitmap_width: bitmap.as_ref().map_or(0, |b| b.width()),
+        bitmap_height: bitmap.as_ref().map_or(0, |b| b.height()),
+        bitmap_stride: bitmap.as_ref().map_or(0, |b| b.stride()),
+        bitmap_format: bitmap
+            .as_ref()
+            .map_or(LITEPARSE_BITMAP_FORMAT_UNKNOWN, |b| {
+                bitmap_format(b.format())
+            }),
+        ..Default::default()
+    };
+    OwnedObject {
+        record,
+        segments,
         filters,
         image_raw,
         image_decoded,
-        image_bitmap,
-        bitmap_width,
-        bitmap_height,
-        bitmap_stride,
-        bitmap_format: bitmap_format_value,
+        image_bitmap: bitmap.map_or_else(Vec::new, |b| b.buffer().to_vec()),
     }
 }
 
@@ -477,8 +468,8 @@ fn pack_siblings(
             .filter_map(|child| object.form_object(child))
             .collect();
         let (child_offset, child_count) = pack_siblings(children, depth + 1, flags, objects);
-        objects[offset + index].child_offset = child_offset;
-        objects[offset + index].child_count = child_count;
+        objects[offset + index].record.child_offset = packed_len(child_offset);
+        objects[offset + index].record.child_count = packed_len(child_count);
     }
     (offset, count)
 }
@@ -493,36 +484,21 @@ pub(crate) fn extract_page_objects(
             "page object flags contain unknown bits; use LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_*",
         ));
     }
-
     let lib = Library::init();
     let document = load_document(&lib, &state.input, state.config.password.as_deref())?;
     liteparse::extract::apply_page_orientation_corrections(
         &document,
         &state.config.page_orientation_corrections,
     )?;
-    let page_count = document.page_count().max(0) as u32;
-    let mut pages = match pages {
-        Some(pages) => pages,
-        None => (1..=page_count).collect(),
-    };
-    pages.truncate(state.config.max_pages);
-
-    let mut owned_pages = Vec::with_capacity(pages.len());
     let mut owned_objects = Vec::new();
-    for page_num in pages {
-        let extracted = (|| -> FfiResult<OwnedPage> {
-            let page_index = (page_num as i32) - 1;
-            let page = document.page(page_index)?;
-            let raw_page_width = page.width();
-            let raw_page_height = page.height();
-            let view_box = page.view_box().unwrap_or(RectF {
-                left: 0.0,
-                top: raw_page_height,
-                right: raw_page_width,
-                bottom: 0.0,
-            });
-            let (page_width, page_height) = page.viewport_size(&view_box);
-            let geometry = LiteParsePageGeometry::from_pdfium(&page);
+    let owned_pages = map_pages(
+        &document,
+        pages,
+        state.config.max_pages,
+        &state.config,
+        "page-objects",
+        |page_num, page| {
+            let facts = page_facts(page);
             let siblings: Vec<_> = (0..page.object_count())
                 .filter_map(|index| page.object(index))
                 .collect();
@@ -530,31 +506,15 @@ pub(crate) fn extract_page_objects(
                 pack_siblings(siblings, 0, flags, &mut owned_objects);
             Ok(OwnedPage {
                 page_number: page_num,
-                page_label: document.page_label(page_index),
-                page_width,
-                page_height,
-                geometry,
+                page_label: document.page_label(page_num as i32 - 1),
+                page_width: facts.width,
+                page_height: facts.height,
+                geometry: facts.geometry,
                 object_offset,
                 object_count,
             })
-        })();
-
-        match extracted {
-            Ok(page) => owned_pages.push(page),
-            Err(error)
-                if state.config.continue_on_page_error
-                    && error.status == LITEPARSE_STATUS_PARSE_ERROR =>
-            {
-                if !state.config.quiet {
-                    eprintln!(
-                        "[page-objects] page {page_num} failed: {} — skipping (continue_on_page_error)",
-                        error.message
-                    );
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
+        },
+    )?;
     Ok(PageObjectsState::pack(owned_pages, owned_objects))
 }
 
@@ -564,82 +524,12 @@ pub unsafe extern "C" fn liteparse_page_objects_free(page_objects: *mut LitePars
     unsafe { free_handle(page_objects) };
 }
 
-/// Return the number of extracted pages.
+/// Borrow the content objects; null for a null handle.
 ///
-/// # Safety
-///
-/// `page_objects` must be live.
+/// `page_objects` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_page_objects_page_count(
+pub unsafe extern "C" fn liteparse_page_objects_view(
     page_objects: *const LiteParsePageObjects,
-) -> usize {
-    unsafe { state_ref(page_objects) }.map_or(0, |state| state.pages.len())
-}
-
-/// Borrow the extracted pages.
-///
-/// # Safety
-///
-/// `page_objects` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_page_objects_pages(
-    page_objects: *const LiteParsePageObjects,
-    out_len: *mut usize,
-) -> *const LiteParsePageObjectPage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(page_objects)?.page_views.as_slice()))
-        })
-    }
-}
-
-/// Borrow the flattened content objects. Page and form ranges index this array.
-///
-/// # Safety
-///
-/// `page_objects` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_page_objects_objects(
-    page_objects: *const LiteParsePageObjects,
-    out_len: *mut usize,
-) -> *const LiteParsePageObject {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(page_objects)?.objects.as_slice()))
-        })
-    }
-}
-
-/// Borrow the flattened path segments. Object `segment_offset/count` indexes here.
-///
-/// # Safety
-///
-/// `page_objects` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_page_objects_segments(
-    page_objects: *const LiteParsePageObjects,
-    out_len: *mut usize,
-) -> *const LiteParsePathSegment {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(page_objects)?.segments.as_slice()))
-        })
-    }
-}
-
-/// Borrow image filter names. Object `filter_offset/count` indexes here.
-///
-/// # Safety
-///
-/// `page_objects` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_page_objects_image_filters(
-    page_objects: *const LiteParsePageObjects,
-    out_len: *mut usize,
-) -> *const LiteParseByteView {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(page_objects)?.filter_views.as_slice()))
-        })
-    }
+) -> *const LiteParsePageObjectsView {
+    unsafe { view_of(page_objects) }
 }

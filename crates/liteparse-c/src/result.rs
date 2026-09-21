@@ -1,53 +1,30 @@
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use liteparse::ParseResult;
+use liteparse::extract::ExtractedPages;
 use liteparse::search::{SearchOptions, search_items};
 use liteparse::types::TextItem;
+use liteparse::{LiteParseConfig as CoreConfig, ParseResult};
 use serde_json::Value;
 
-use crate::document::DescriptiveInfo;
+use crate::content::LiteParseContent;
 use crate::handle::{
-    LiteParseByteView, build_handle, bytes_view, free_handle, opaque_handles, optional_str_view,
-    required_view_str, slice_out, state_ref, write_out,
+    LiteParseByteView, array_ptr, bytes_view, create_handle, free_handle, opaque_handles,
+    optional_str_view, required_view_str, state_ref, view_of, view_state, write_out,
 };
+use crate::pack::{Packed, PageParts};
+use crate::records::*;
 use crate::render::effective_dpi;
-use crate::screenshots::screenshot_views;
+use crate::screenshots::pack_screenshots;
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
-use crate::views::{
-    BlocksPacked, LITEPARSE_FORM_TYPE_NONE, LiteParseAnnotation, LiteParseDocumentMeta,
-    LiteParseDocumentMetaValue, LiteParseFormField, LiteParseFormTypeValue, LiteParseImage,
-    LiteParseImageRef, LiteParseLayoutBlock, LiteParseLayoutCell, LiteParseLayoutRow,
-    LiteParseOutlineEntry, LiteParsePageComplexity, LiteParsePageComplexityValue,
-    LiteParsePageError, LiteParsePageGeometryValue, LiteParsePageSize, LiteParseProjectedLayoutAbi,
-    LiteParseProjectedLayoutPage, LiteParseProjectedLayoutSnapshot, LiteParseProjectedLine,
-    LiteParseProjectedRegion, LiteParseProjectedSpan, LiteParseProjectedWord, LiteParseRect,
-    LiteParseRectValue, LiteParseScreenshot, LiteParseScreenshotRect, LiteParseStructureAttribute,
-    LiteParseStructureNode, LiteParseTextItem, LiteParseVectorLine, LiteParseVectorShape,
-    LiteParseWordBox, LiteParseXfaPacket, ProjectedLayoutPacked, StructurePacked, VectorsPacked,
-    projected_layout_abi, views,
-};
 
+/// A parse or extract result. Views borrow from it until it is freed.
 pub struct LiteParseResult {
     _opaque: [u8; 0],
 }
 
-/// The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseResultNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseResult,
-}
-
+/// Phrase matches copied out of a result; they outlive it.
 pub struct LiteParseSearchMatches {
     _opaque: [u8; 0],
-}
-
-/// The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseSearchMatchesNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseSearchMatches,
 }
 
 opaque_handles! {
@@ -55,194 +32,323 @@ opaque_handles! {
     LiteParseSearchMatches => SearchState, "matches";
 }
 
-struct PackedExtras {
-    outline: Vec<LiteParseOutlineEntry>,
-    page_errors: Vec<LiteParsePageError>,
-    xfa_packets: Vec<LiteParseXfaPacket>,
-    images: Vec<LiteParseImage>,
-    image_refs: Vec<Vec<LiteParseImageRef>>,
-    screenshots: Vec<LiteParseScreenshot>,
-    screenshot_rects: Vec<Vec<LiteParseScreenshotRect>>,
-    annotations: Vec<Vec<LiteParseAnnotation>>,
-    quadpoints: Vec<Vec<Vec<LiteParseRect>>>,
-    form_fields: Vec<Vec<LiteParseFormField>>,
-    field_options: Vec<Vec<Vec<LiteParseByteView>>>,
-    field_selected_options: Vec<Vec<Vec<LiteParseByteView>>>,
-    structure: Vec<Option<StructurePacked>>,
-    blocks: Vec<Option<BlocksPacked>>,
-    vectors: Vec<Option<VectorsPacked>>,
+/// `LiteParseResultView.flags` bits.
+pub const LITEPARSE_RESULT_FLAG_HAS_DOC_META: u32 = 1 << 0;
+pub const LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE: u32 = 1 << 1;
+pub const LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS: u32 = 1 << 2;
+/// Text metadata extraction was requested in the parser configuration.
+pub const LITEPARSE_RESULT_FLAG_TEXT_METADATA: u32 = 1 << 3;
+/// Produced by `liteparse_document_extract`: no projection, text, or Markdown.
+pub const LITEPARSE_RESULT_FLAG_EXTRACT_ONLY: u32 = 1 << 4;
+/// Extraction flattened at least one page to recover form-widget text; see
+/// `flattened_page_numbers`.
+pub const LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS: u32 = 1 << 5;
+
+/// `liteparse_result_search` flags.
+pub const LITEPARSE_SEARCH_FLAG_CASE_SENSITIVE: u32 = 1 << 0;
+
+/// Everything a result exposes. `content` is the page-content model shared
+/// with `liteparse_parser_parse_content`; the remaining arrays are result
+/// only. Projected spans share `content.words` and `content.char_codes`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseResultView {
+    pub content: LiteParseContent,
+    /// Full-document plain text or Markdown, per the output format.
+    pub text: LiteParseByteView,
+    pub creator: LiteParseByteView,
+    pub producer: LiteParseByteView,
+    pub doc_meta: LiteParseDocumentMeta,
+    pub total_pages: u32,
+    pub image_error_count: u32,
+    /// `LITEPARSE_FORM_TYPE_*`, meaningful with `HAS_FORM_TYPE`.
+    pub form_type: i32,
+    /// `LITEPARSE_RESULT_FLAG_*` bits.
+    pub flags: u32,
+    pub screenshots: *const LiteParseScreenshot,
+    pub screenshots_len: usize,
+    pub screenshot_rects: *const LiteParseScreenshotRect,
+    pub screenshot_rects_len: usize,
+    pub xfa_packets: *const LiteParseXfaPacket,
+    pub xfa_packets_len: usize,
+    pub figures: *const LiteParseRect,
+    pub figures_len: usize,
+    pub item_frames: *const LiteParseItemFrame,
+    pub item_frames_len: usize,
+    pub projected_lines: *const LiteParseProjectedLine,
+    pub projected_lines_len: usize,
+    pub projected_spans: *const LiteParseTextItem,
+    pub projected_spans_len: usize,
+    pub region_paths: *const u16,
+    pub region_paths_len: usize,
+    pub regions: *const LiteParseProjectedRegion,
+    pub regions_len: usize,
+    pub region_children: *const u32,
+    pub region_children_len: usize,
+    pub flattened_page_numbers: *const u32,
+    pub flattened_page_numbers_len: usize,
 }
 
-impl PackedExtras {
-    fn pack(result: &ParseResult, requested_dpi: f32) -> Self {
-        let page_sizes: HashMap<usize, (f32, f32)> = result
-            .pages
-            .iter()
-            .map(|page| (page.page_number, (page.page_width, page.page_height)))
-            .collect();
-        let screenshots_with_dpi = result.screenshots.iter().map(|shot| {
-            let dpi = page_sizes
-                .get(&(shot.page_num as usize))
-                .map_or(requested_dpi, |(width, height)| {
-                    effective_dpi(requested_dpi, *width, *height)
-                });
-            (shot, dpi)
-        });
-        let (screenshots, screenshot_rects) = screenshot_views(screenshots_with_dpi);
-        Self {
-            outline: views(&result.outline),
-            page_errors: views(&result.page_errors),
-            xfa_packets: views(result.xfa_packets.as_deref().unwrap_or_default()),
-            images: views(&result.images),
-            image_refs: per_page(result, |page| views(&page.image_refs)),
-            screenshots,
-            screenshot_rects,
-            annotations: per_page(result, |page| {
-                views(page.annotations.as_deref().unwrap_or_default())
-            }),
-            quadpoints: per_page(result, |page| {
-                page.annotations
-                    .iter()
-                    .flatten()
-                    .map(|annotation| views(&annotation.quadpoint_rects))
-                    .collect()
-            }),
-            form_fields: per_page(result, |page| {
-                views(page.form_fields.as_deref().unwrap_or_default())
-            }),
-            field_options: per_page(result, |page| {
-                page.form_fields
-                    .iter()
-                    .flatten()
-                    .map(|field| string_views(&field.options))
-                    .collect()
-            }),
-            field_selected_options: per_page(result, |page| {
-                page.form_fields
-                    .iter()
-                    .flatten()
-                    .map(|field| string_views(&field.selected_options))
-                    .collect()
-            }),
-            structure: per_page(result, |page| {
-                page.structure_tree.as_ref().map(StructurePacked::pack)
-            }),
-            blocks: per_page(result, |page| {
-                page.blocks
-                    .as_deref()
-                    .filter(|blocks| !blocks.is_empty())
-                    .map(BlocksPacked::pack)
-            }),
-            vectors: per_page(result, |page| {
-                page.vector_graphics.as_ref().map(VectorsPacked::pack)
-            }),
-        }
-    }
+/// Text items copied out of a result by `liteparse_result_search`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseSearchView {
+    pub items: *const LiteParseTextItem,
+    pub items_len: usize,
+    pub words: *const LiteParseWordBox,
+    pub words_len: usize,
+    pub char_codes: *const u32,
+    pub char_codes_len: usize,
 }
 
-fn per_page<T>(result: &ParseResult, f: impl Fn(&liteparse::ParsedPage) -> T) -> Vec<T> {
-    result.pages.iter().map(f).collect()
+enum Source {
+    Parsed(Box<ParseResult>),
+    Extracted(ExtractedPages),
 }
 
-fn string_views(strings: &[String]) -> Vec<LiteParseByteView> {
-    strings.iter().map(|s| bytes_view(s.as_bytes())).collect()
+/// Result-level scalars that differ between parse and extract sources.
+struct ResultFacts {
+    text: LiteParseByteView,
+    creator: LiteParseByteView,
+    producer: LiteParseByteView,
+    doc_meta: Option<LiteParseDocumentMeta>,
+    total_pages: u32,
+    image_error_count: u32,
+    form_type: Option<i32>,
+    flags: u32,
+    flattened_page_numbers: Vec<u32>,
 }
 
 pub(crate) struct ResultState {
-    result: ParseResult,
+    source: Source,
+    /// Backing storage for the pointers in `view`.
+    #[allow(dead_code)]
+    packed: Packed,
+    #[allow(dead_code)]
+    screenshots: Vec<LiteParseScreenshot>,
+    #[allow(dead_code)]
+    screenshot_rects: Vec<LiteParseScreenshotRect>,
+    #[allow(dead_code)]
+    xfa_packets: Vec<LiteParseXfaPacket>,
+    #[allow(dead_code)]
+    flattened_page_numbers: Vec<u32>,
+    view: LiteParseResultView,
     extract_text_metadata: bool,
-    requested_dpi: f32,
     descriptive: Option<DescriptiveInfo>,
-    geometries: Vec<LiteParsePageGeometryValue>,
     json: OnceLock<Result<String, String>>,
-    items: OnceLock<Vec<Vec<LiteParseTextItem>>>,
-    words: OnceLock<Vec<Vec<Vec<LiteParseWordBox>>>>,
-    extras: OnceLock<PackedExtras>,
-    projected_layout: OnceLock<ProjectedLayoutPacked>,
 }
 
+view_state!(ResultState => LiteParseResultView, view);
+
+pub(crate) type PageGeometries = Vec<Option<(LiteParsePageGeometry, bool)>>;
+
 impl ResultState {
-    pub(crate) fn new(
+    /// Wrap a parse result. `geometries` is parallel to `result.pages`.
+    pub(crate) fn parsed(
         result: ParseResult,
-        extract_text_metadata: bool,
-        requested_dpi: f32,
+        config: &CoreConfig,
         descriptive: Option<DescriptiveInfo>,
-        geometries: Vec<LiteParsePageGeometryValue>,
+        geometries: PageGeometries,
     ) -> Self {
-        Self {
-            result,
-            extract_text_metadata,
-            requested_dpi,
-            descriptive,
-            geometries,
-            json: OnceLock::new(),
-            items: OnceLock::new(),
-            words: OnceLock::new(),
-            extras: OnceLock::new(),
-            projected_layout: OnceLock::new(),
+        let mut packed = Packed::default();
+        for (index, page) in result.pages.iter().enumerate() {
+            packed.push_page(PageParts::parsed(
+                page,
+                geometries.get(index).copied().flatten(),
+            ));
         }
+        packed.images = views(&result.images);
+        packed.outline = views(&result.outline);
+        packed.page_errors = views(&result.page_errors);
+        let requested_dpi = config.dpi;
+        let screenshots_with_dpi = result.screenshots.iter().map(|shot| {
+            let dpi = result
+                .pages
+                .iter()
+                .find(|page| page.page_number == shot.page_num as usize)
+                .map_or(requested_dpi, |page| {
+                    effective_dpi(requested_dpi, page.page_width, page.page_height)
+                });
+            (shot, dpi)
+        });
+        let (screenshots, screenshot_rects) = pack_screenshots(screenshots_with_dpi);
+        let xfa_packets = views(result.xfa_packets.as_deref().unwrap_or_default());
+        let facts = ResultFacts {
+            text: bytes_view(result.text.as_bytes()),
+            creator: optional_str_view(result.creator.as_deref()),
+            producer: optional_str_view(result.producer.as_deref()),
+            doc_meta: result
+                .doc_meta
+                .as_ref()
+                .map(|meta| LiteParseDocumentMeta::build(meta, descriptive.as_ref())),
+            total_pages: result.total_pages,
+            image_error_count: result.image_error_count,
+            form_type: result.form_type,
+            flags: flag_bits(&[(
+                result.xfa_packets.is_some(),
+                LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS,
+            )]),
+            flattened_page_numbers: Vec::new(),
+        };
+        Self::assemble(
+            Source::Parsed(Box::new(result)),
+            packed,
+            screenshots,
+            screenshot_rects,
+            xfa_packets,
+            facts,
+            config.extract_text_metadata,
+            descriptive,
+        )
     }
 
-    fn page(&self, index: usize) -> Option<&liteparse::ParsedPage> {
-        self.result.pages.get(index)
+    /// Wrap pre-projection pages from `extract_pages_and_images`.
+    pub(crate) fn extracted(
+        pages: ExtractedPages,
+        form_type: Option<i32>,
+        config: &CoreConfig,
+        geometries: PageGeometries,
+    ) -> Self {
+        let mut packed = Packed::default();
+        for (index, page) in pages.pages.iter().enumerate() {
+            packed.push_page(PageParts::extracted(
+                page,
+                geometries.get(index).copied().flatten(),
+            ));
+        }
+        packed.images = views(&pages.images);
+        packed.page_errors = views(&pages.page_errors);
+        let facts = ResultFacts {
+            text: LiteParseByteView::default(),
+            creator: LiteParseByteView::default(),
+            producer: LiteParseByteView::default(),
+            doc_meta: None,
+            total_pages: 0,
+            image_error_count: pages.image_error_count,
+            form_type,
+            flags: flag_bits(&[
+                (true, LITEPARSE_RESULT_FLAG_EXTRACT_ONLY),
+                (
+                    pages.flattened_form_widgets,
+                    LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS,
+                ),
+            ]),
+            flattened_page_numbers: pages.flattened_page_numbers.clone(),
+        };
+        Self::assemble(
+            Source::Extracted(pages),
+            packed,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            facts,
+            config.extract_text_metadata,
+            None,
+        )
     }
 
-    fn geometry(&self, index: usize) -> LiteParsePageGeometryValue {
-        self.geometries.get(index).copied().unwrap_or_default()
+    // Moving vectors into the state keeps their heap buffers, so a view built
+    // from the locals stays valid.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        source: Source,
+        packed: Packed,
+        screenshots: Vec<LiteParseScreenshot>,
+        screenshot_rects: Vec<LiteParseScreenshotRect>,
+        xfa_packets: Vec<LiteParseXfaPacket>,
+        facts: ResultFacts,
+        extract_text_metadata: bool,
+        descriptive: Option<DescriptiveInfo>,
+    ) -> Self {
+        let flags = facts.flags
+            | flag_bits(&[
+                (facts.doc_meta.is_some(), LITEPARSE_RESULT_FLAG_HAS_DOC_META),
+                (
+                    facts.form_type.is_some(),
+                    LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE,
+                ),
+                (extract_text_metadata, LITEPARSE_RESULT_FLAG_TEXT_METADATA),
+            ]);
+        let flattened_page_numbers = facts.flattened_page_numbers;
+        let view = LiteParseResultView {
+            content: packed.content_view(),
+            text: facts.text,
+            creator: facts.creator,
+            producer: facts.producer,
+            doc_meta: facts.doc_meta.unwrap_or_default(),
+            total_pages: facts.total_pages,
+            image_error_count: facts.image_error_count,
+            form_type: facts.form_type.unwrap_or(LITEPARSE_FORM_TYPE_NONE),
+            flags,
+            screenshots: array_ptr(&screenshots),
+            screenshots_len: screenshots.len(),
+            screenshot_rects: array_ptr(&screenshot_rects),
+            screenshot_rects_len: screenshot_rects.len(),
+            xfa_packets: array_ptr(&xfa_packets),
+            xfa_packets_len: xfa_packets.len(),
+            figures: array_ptr(&packed.figures),
+            figures_len: packed.figures.len(),
+            item_frames: array_ptr(&packed.item_frames),
+            item_frames_len: packed.item_frames.len(),
+            projected_lines: array_ptr(&packed.projected_lines),
+            projected_lines_len: packed.projected_lines.len(),
+            projected_spans: array_ptr(&packed.projected_spans),
+            projected_spans_len: packed.projected_spans.len(),
+            region_paths: array_ptr(&packed.region_paths),
+            region_paths_len: packed.region_paths.len(),
+            regions: array_ptr(&packed.regions),
+            regions_len: packed.regions.len(),
+            region_children: array_ptr(&packed.region_children),
+            region_children_len: packed.region_children.len(),
+            flattened_page_numbers: array_ptr(&flattened_page_numbers),
+            flattened_page_numbers_len: flattened_page_numbers.len(),
+        };
+        Self {
+            source,
+            packed,
+            screenshots,
+            screenshot_rects,
+            xfa_packets,
+            flattened_page_numbers,
+            view,
+            extract_text_metadata,
+            descriptive,
+            json: OnceLock::new(),
+        }
     }
 
     fn json(&self) -> FfiResult<&str> {
         self.json
-            .get_or_init(|| {
-                format_result(
-                    &self.result,
+            .get_or_init(|| match &self.source {
+                Source::Parsed(result) => format_result(
+                    result,
                     self.extract_text_metadata,
                     self.descriptive.as_ref(),
                 )
-                .map_err(|error| error.message)
+                .map_err(|error| error.message),
+                Source::Extracted(_) => {
+                    Err("extract results have no JSON form; read the view".to_owned())
+                }
             })
             .as_deref()
             .map_err(FfiError::serialization)
     }
 
-    fn items(&self) -> &[Vec<LiteParseTextItem>] {
-        self.items.get_or_init(|| {
-            self.result
+    fn page_items(&self, page_index: usize) -> FfiResult<&[TextItem]> {
+        let items = match &self.source {
+            Source::Parsed(result) => result
                 .pages
-                .iter()
-                .map(|page| {
-                    page.text_items
-                        .iter()
-                        .map(|item| LiteParseTextItem::borrow(item, self.extract_text_metadata))
-                        .collect()
-                })
-                .collect()
-        })
-    }
-
-    fn words(&self) -> &[Vec<Vec<LiteParseWordBox>>] {
-        self.words.get_or_init(|| {
-            self.result
-                .pages
-                .iter()
-                .map(|page| {
-                    page.text_items
-                        .iter()
-                        .map(|item| views(&item.words))
-                        .collect()
-                })
-                .collect()
-        })
-    }
-
-    fn extras(&self) -> &PackedExtras {
-        self.extras
-            .get_or_init(|| PackedExtras::pack(&self.result, self.requested_dpi))
-    }
-
-    fn projected_layout(&self) -> &ProjectedLayoutPacked {
-        self.projected_layout.get_or_init(|| {
-            ProjectedLayoutPacked::pack(&self.result.pages, self.extract_text_metadata)
+                .get(page_index)
+                .map(|p| p.text_items.as_slice()),
+            Source::Extracted(pages) => {
+                pages.pages.get(page_index).map(|p| p.text_items.as_slice())
+            }
+        };
+        items.ok_or_else(|| {
+            FfiError::invalid_argument(format!(
+                "page_index {page_index} is out of range for {} pages",
+                self.packed.pages.len()
+            ))
         })
     }
 }
@@ -309,9 +415,19 @@ pub unsafe extern "C" fn liteparse_result_free(result: *mut LiteParseResult) {
     unsafe { free_handle(result) };
 }
 
-/// Borrow the cached pretty JSON result.
+/// Borrow the result view; null for a null handle. Valid until
+/// `liteparse_result_free`.
 ///
-/// # Safety
+/// `result` must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_view(
+    result: *const LiteParseResult,
+) -> *const LiteParseResultView {
+    unsafe { view_of(result) }
+}
+
+/// Borrow the cached pretty JSON form of a parse result. Extract results
+/// have none.
 ///
 /// `result` must be live and `out` writable.
 #[unsafe(no_mangle)]
@@ -319,948 +435,82 @@ pub unsafe extern "C" fn liteparse_result_to_json(
     result: *const LiteParseResult,
     out: *mut LiteParseByteView,
 ) -> LiteParseStatus {
-    unsafe { write_out(out, None) };
+    unsafe { write_out(out, LiteParseByteView::default()) };
     boundary(|| unsafe {
         let json = state_ref(result)?.json()?;
-        write_out(out, Some(bytes_view(json.as_bytes())));
+        write_out(out, bytes_view(json.as_bytes()));
         Ok(())
     })
 }
 
-/// Return the source document page count.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_total_pages(result: *const LiteParseResult) -> u32 {
-    unsafe { state_ref(result) }.map_or(0, |state| state.result.total_pages)
-}
-
-/// Return the number of parsed pages.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_count(result: *const LiteParseResult) -> usize {
-    unsafe { state_ref(result) }.map_or(0, |state| state.result.pages.len())
-}
-
-/// Return a page's 1-based source page number.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_number(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> u32 {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map_or(0, |page| page.page_number.min(u32::MAX as usize) as u32)
-}
-
-/// Borrow a page's `/PageLabels` label, or an empty view when the PDF has none.
-///
-/// # Safety
-///
-/// `result` must be live. The view is valid until `liteparse_result_free`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_label(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map(|page| optional_str_view(page.page_label.as_deref()))
-        .unwrap_or_default()
-}
-
-/// Borrow full-document plain text or Markdown, according to the output format.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_text(
-    result: *const LiteParseResult,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .map(|state| bytes_view(state.result.text.as_bytes()))
-        .unwrap_or_default()
-}
-
-/// Borrow one page's plain UTF-8 text.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_text(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map(|page| bytes_view(page.text.as_bytes()))
-        .unwrap_or_default()
-}
-
-/// Borrow one page's Markdown; empty unless Markdown output was requested.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_markdown(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map(|page| bytes_view(page.markdown.as_bytes()))
-        .unwrap_or_default()
-}
-
-/// Borrow the document's optional `/Info` Creator value. Empty when absent.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_creator(
-    result: *const LiteParseResult,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.result.creator.as_deref())
-        .map(|value| bytes_view(value.as_bytes()))
-        .unwrap_or_default()
-}
-
-/// Borrow the document's optional `/Info` Producer value. Empty when absent.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_producer(
-    result: *const LiteParseResult,
-) -> LiteParseByteView {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.result.producer.as_deref())
-        .map(|value| bytes_view(value.as_bytes()))
-        .unwrap_or_default()
-}
-
-/// Return one page's viewport dimensions in 72-DPI points.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_size(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParsePageSize {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map(|page| LiteParsePageSize {
-            width: page.page_width,
-            height: page.page_height,
-        })
-        .unwrap_or_default()
-}
-
-/// Return the resolved PDF box, user unit, and rotation for one page.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_geometry(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParsePageGeometryValue {
-    unsafe { state_ref(result) }
-        .map(|state| state.geometry(page_index))
-        .unwrap_or_default()
-}
-
-/// Return the count of image extraction failures.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_image_error_count(result: *const LiteParseResult) -> u32 {
-    unsafe { state_ref(result) }.map_or(0, |state| state.result.image_error_count)
-}
-
-/// Return the optional document form type.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_form_type(
-    result: *const LiteParseResult,
-) -> LiteParseFormTypeValue {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.result.form_type)
-        .map_or(
-            LiteParseFormTypeValue {
-                present: false,
-                value: LITEPARSE_FORM_TYPE_NONE,
-            },
-            |value| LiteParseFormTypeValue {
-                present: true,
-                value,
-            },
-        )
-}
-
-/// Return document metadata when extraction was enabled.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_doc_meta(
-    result: *const LiteParseResult,
-) -> LiteParseDocumentMetaValue {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| {
-            state
-                .result
-                .doc_meta
-                .as_ref()
-                .map(|meta| (meta, state.descriptive.as_ref()))
-        })
-        .map(|(meta, descriptive)| LiteParseDocumentMetaValue {
-            present: true,
-            meta: LiteParseDocumentMeta::build(meta, descriptive),
-        })
-        .unwrap_or_default()
-}
-
-/// Return one page's union content bounds by value.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_content_bounds(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParseRectValue {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .map(|page| LiteParseRectValue::from(page.content_bounds.as_ref()))
-        .unwrap_or_default()
-}
-
-/// Return complexity when it was included during parsing.
-///
-/// # Safety
-///
-/// `result` must be live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_complexity(
-    result: *const LiteParseResult,
-    page_index: usize,
-) -> LiteParsePageComplexityValue {
-    unsafe { state_ref(result) }
-        .ok()
-        .and_then(|state| state.page(page_index))
-        .and_then(|page| page.complexity.as_ref())
-        .map(|stats| LiteParsePageComplexityValue {
-            present: true,
-            stats: LiteParsePageComplexity::from(stats),
-        })
-        .unwrap_or_default()
-}
-
-/// Borrow one page's text items.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_text_items(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseTextItem {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .items()
-                .get(page_index)
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one text item's word boxes.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_word_boxes(
-    result: *const LiteParseResult,
-    page_index: usize,
-    item_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseWordBox {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .words()
-                .get(page_index)
-                .and_then(|items| items.get(item_index))
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one page's image objects, including bounds when bytes were skipped.
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_image_refs(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseImageRef {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .image_refs
-                .get(page_index)
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow all extracted images.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_images(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseImage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.extras().images.as_slice()))
-        })
-    }
-}
-
-/// Borrow screenshots produced during parsing.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_screenshots(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseScreenshot {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.extras().screenshots.as_slice()))
-        })
-    }
-}
-
-/// Borrow one screenshot's detected rectangles.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_screenshot_rects(
-    result: *const LiteParseResult,
-    index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseScreenshotRect {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .screenshot_rects
-                .get(index)
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow the document outline.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_outline(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseOutlineEntry {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.extras().outline.as_slice()))
-        })
-    }
-}
-
-/// Borrow all tolerated page errors.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_page_errors(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParsePageError {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.extras().page_errors.as_slice()))
-        })
-    }
-}
-
-/// Borrow extracted XFA packets.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_xfa_packets(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseXfaPacket {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.extras().xfa_packets.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's annotations.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_annotations(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseAnnotation {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .annotations
-                .get(page_index)
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one annotation's quadpoint rectangles.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_annotation_quadpoints(
-    result: *const LiteParseResult,
-    page_index: usize,
-    annotation_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseRect {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .quadpoints
-                .get(page_index)
-                .and_then(|page| page.get(annotation_index))
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one page's AcroForm widgets.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_form_fields(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseFormField {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .form_fields
-                .get(page_index)
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one widget's option strings.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_form_field_options(
-    result: *const LiteParseResult,
-    page_index: usize,
-    field_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseByteView {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .field_options
-                .get(page_index)
-                .and_then(|fields| fields.get(field_index))
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one widget's selected option strings.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_form_field_selected_options(
-    result: *const LiteParseResult,
-    page_index: usize,
-    field_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseByteView {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(result)?
-                .extras()
-                .field_selected_options
-                .get(page_index)
-                .and_then(|fields| fields.get(field_index))
-                .map(Vec::as_slice))
-        })
-    }
-}
-
-/// Borrow one page's pre-order structure-tree nodes.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_structure_nodes(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseStructureNode {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(structure(state_ref(result)?, page_index).map(|packed| packed.nodes.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's flattened structure attributes.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_structure_attributes(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseStructureAttribute {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(
-                structure(state_ref(result)?, page_index)
-                    .map(|packed| packed.attributes.as_slice()),
-            )
-        })
-    }
-}
-
-/// Borrow one page's flattened structure-node annotations.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_structure_annotations(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseAnnotation {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(structure(state_ref(result)?, page_index)
-                .map(|packed| packed.annotations.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's flattened structure-node marked-content ids.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_structure_marked_content_ids(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const i32 {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(structure(state_ref(result)?, page_index)
-                .map(|packed| packed.marked_content_ids.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's classified layout blocks.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_blocks(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseLayoutBlock {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(blocks(state_ref(result)?, page_index).map(|packed| packed.blocks.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's packed layout table cells. Block header ranges and row
-/// offsets index into this slice.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_block_cells(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseLayoutCell {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(blocks(state_ref(result)?, page_index).map(|packed| packed.cells.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's packed layout table rows.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_block_rows(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseLayoutRow {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(blocks(state_ref(result)?, page_index).map(|packed| packed.rows.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's verbatim layout source lines (`code`, `grid_fallback`).
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_block_lines(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseByteView {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(blocks(state_ref(result)?, page_index).map(|packed| packed.lines.as_slice()))
-        })
-    }
-}
-
-/// Return the C layout facts for the projected-layout snapshot records.
-#[unsafe(no_mangle)]
-pub extern "C" fn liteparse_projected_layout_abi() -> LiteParseProjectedLayoutAbi {
-    projected_layout_abi()
-}
-
-/// Borrow the projected-layout snapshot descriptor.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_snapshot(
-    result: *const LiteParseResult,
-) -> LiteParseProjectedLayoutSnapshot {
-    unsafe { state_ref(result) }
-        .map(|state| state.projected_layout().snapshot)
-        .unwrap_or_default()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_pages(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseProjectedLayoutPage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.projected_layout().pages.as_slice()))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_lines(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseProjectedLine {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.projected_layout().lines.as_slice()))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_spans(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseProjectedSpan {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.projected_layout().spans.as_slice()))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_words(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseProjectedWord {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(result)?.projected_layout().words.as_slice()))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_regions(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const LiteParseProjectedRegion {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(
-                state_ref(result)?.projected_layout().regions.as_slice(),
-            ))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_region_paths(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const u16 {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(
-                state_ref(result)?
-                    .projected_layout()
-                    .region_paths
-                    .as_slice(),
-            ))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_region_items(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const u64 {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(
-                state_ref(result)?
-                    .projected_layout()
-                    .region_items
-                    .as_slice(),
-            ))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_region_children(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const u64 {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(
-                state_ref(result)?
-                    .projected_layout()
-                    .region_children
-                    .as_slice(),
-            ))
-        })
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_projected_layout_char_codes(
-    result: *const LiteParseResult,
-    out_len: *mut usize,
-) -> *const u32 {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(
-                state_ref(result)?.projected_layout().char_codes.as_slice(),
-            ))
-        })
-    }
-}
-
-/// Borrow one page's vector path objects.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_vector_shapes(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseVectorShape {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(vectors(state_ref(result)?, page_index).map(|packed| packed.shapes.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's merged vector segments.
-///
-/// # Safety
-///
-/// `result` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_result_vector_lines(
-    result: *const LiteParseResult,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseVectorLine {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(vectors(state_ref(result)?, page_index).map(|packed| packed.lines.as_slice()))
-        })
-    }
-}
-
-fn structure(state: &ResultState, page_index: usize) -> Option<&StructurePacked> {
-    state.extras().structure.get(page_index)?.as_ref()
-}
-
-fn blocks(state: &ResultState, page_index: usize) -> Option<&BlocksPacked> {
-    state.extras().blocks.get(page_index)?.as_ref()
-}
-
-fn vectors(state: &ResultState, page_index: usize) -> Option<&VectorsPacked> {
-    state.extras().vectors.get(page_index)?.as_ref()
-}
-
 pub(crate) struct SearchState {
-    // Keeps the strings borrowed by `items` alive.
+    /// Owns the strings `packed` borrows.
     #[allow(dead_code)]
     source: Vec<TextItem>,
-    items: Vec<LiteParseTextItem>,
+    #[allow(dead_code)]
+    packed: Packed,
+    view: LiteParseSearchView,
 }
 
-/// Search one page. Matches outlive the result handle.
+view_state!(SearchState => LiteParseSearchView, view);
+
+/// Find phrase matches on one page as merged text items. `page_index` is a
+/// 0-based index into `content.pages`, not a source page number. `flags` is
+/// a mask of `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
 ///
-/// # Safety
-///
-/// `result` must be live and `phrase` readable UTF-8.
+/// `result` must be live, `phrase` readable UTF-8, and `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_result_search(
     result: *const LiteParseResult,
     page_index: usize,
     phrase: LiteParseByteView,
-    case_sensitive: bool,
-) -> LiteParseSearchMatchesNew {
-    let (status, handle) = build_handle(|| unsafe {
-        let phrase = required_view_str(phrase, "phrase")?;
-        let state = state_ref(result)?;
-        let page = state.page(page_index).ok_or_else(|| {
-            FfiError::invalid_argument(format!(
-                "page_index {page_index} is out of range for {} parsed pages",
-                state.result.pages.len()
-            ))
-        })?;
-        let options = SearchOptions {
-            phrase,
-            case_sensitive,
-        };
-        let source = search_items(&page.text_items, &options);
-        let items = source
-            .iter()
-            .map(|item| LiteParseTextItem::borrow(item, state.extract_text_metadata))
-            .collect();
-        Ok(SearchState { source, items })
-    });
-    LiteParseSearchMatchesNew { status, handle }
+    flags: u32,
+    out: *mut *mut LiteParseSearchMatches,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            if flags & !LITEPARSE_SEARCH_FLAG_CASE_SENSITIVE != 0 {
+                return Err(FfiError::invalid_argument(
+                    "search flags contain unknown bits",
+                ));
+            }
+            let phrase = required_view_str(phrase, "phrase")?;
+            let state = state_ref(result)?;
+            let options = SearchOptions {
+                phrase,
+                case_sensitive: flags & LITEPARSE_SEARCH_FLAG_CASE_SENSITIVE != 0,
+            };
+            let source = search_items(state.page_items(page_index)?, &options);
+            let mut packed = Packed::default();
+            for item in &source {
+                let record = packed.text_item(item);
+                packed.items.push(record);
+            }
+            let view = LiteParseSearchView {
+                items: array_ptr(&packed.items),
+                items_len: packed.items.len(),
+                words: array_ptr(&packed.words),
+                words_len: packed.words.len(),
+                char_codes: array_ptr(&packed.char_codes),
+                char_codes_len: packed.char_codes.len(),
+            };
+            Ok(SearchState {
+                source,
+                packed,
+                view,
+            })
+        })
+    }
 }
 
-/// Borrow all phrase matches.
+/// Borrow the matches; null for a null handle.
 ///
-/// # Safety
-///
-/// `matches` must be live and `out_len` writable.
+/// `matches` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_search_matches_slice(
+pub unsafe extern "C" fn liteparse_search_matches_view(
     matches: *const LiteParseSearchMatches,
-    out_len: *mut usize,
-) -> *const LiteParseTextItem {
-    unsafe { slice_out(out_len, || Ok(Some(state_ref(matches)?.items.as_slice()))) }
+) -> *const LiteParseSearchView {
+    unsafe { view_of(matches) }
 }
 
 /// Destroy a search-match handle. Null is allowed.

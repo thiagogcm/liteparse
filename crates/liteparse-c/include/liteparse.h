@@ -24,12 +24,18 @@
 #define LITEPARSE_IMAGE_MODE_EMBED 2
 
 /**
- * Keep the native default in fields where zero is not meaningful.
+ * Keeps the native default in `u32` config fields.
  */
 #define LITEPARSE_UNSET UINT32_MAX
 
 /**
- * Bits are ABI-stable: append new flags without renumbering existing ones.
+ * `LiteParseConfig.flags` bits.
+ */
+#define LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX (1 << 0)
+
+/**
+ * `LiteParseConfig.bools_set` / `bools_values` bits. Bits are ABI-stable:
+ * append new flags without renumbering existing ones.
  */
 #define LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR (1ull << 0)
 
@@ -78,21 +84,30 @@
 #define LITEPARSE_FLAG_EXTRACT_SCREENSHOTS (1ull << 22)
 
 /**
- * Values for `LiteParseContentGraphic.kind`.
+ * `LiteParseDocumentInfo.flags` bit: the source was converted to PDF (an
+ * office document or image).
  */
-#define LITEPARSE_GRAPHIC_STROKE 0
-
-#define LITEPARSE_GRAPHIC_RECT 1
+#define LITEPARSE_DOCUMENT_FLAG_CONVERTED (1 << 0)
 
 /**
- * Pixel formats passed to a `LiteParseOcrRecognizeFn`.
+ * `liteparse_parser_set_ocr_callback` flags.
+ */
+#define LITEPARSE_OCR_FLAG_PREFERS_GRAYSCALE (1 << 0)
+
+/**
+ * `LiteParseOcrImage.pixel_format` values.
  */
 #define LITEPARSE_OCR_PIXEL_FORMAT_RGB 0
 
 #define LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE 1
 
 /**
- * Values for `LiteParsePageObject.kind`.
+ * `LiteParseOcrWord.flags` bits.
+ */
+#define LITEPARSE_OCR_WORD_FLAG_HAS_POLYGON (1 << 0)
+
+/**
+ * `LiteParsePageObject.kind` values.
  */
 #define LITEPARSE_PAGE_OBJECT_TEXT 0
 
@@ -107,7 +122,28 @@
 #define LITEPARSE_PAGE_OBJECT_UNKNOWN 5
 
 /**
- * Values for `LiteParsePathSegment.kind`.
+ * `LiteParsePageObject.flags` bits.
+ */
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_MATRIX (1 << 0)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_BOUNDS (1 << 1)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_DRAW_MODE (1 << 2)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_PATH_FILLED (1 << 3)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_PATH_STROKED (1 << 4)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_WIDTH (1 << 5)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_FILL_COLOR (1 << 6)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_STROKE_COLOR (1 << 7)
+
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_IMAGE_METADATA (1 << 8)
+
+/**
+ * `LiteParsePathSegment.kind` values.
  */
 #define LITEPARSE_PATH_SEGMENT_UNKNOWN 0
 
@@ -118,7 +154,14 @@
 #define LITEPARSE_PATH_SEGMENT_BEZIERTO 3
 
 /**
- * Values for `LiteParsePageObject.bitmap_format`.
+ * `LiteParsePathSegment.flags` bits.
+ */
+#define LITEPARSE_PATH_SEGMENT_FLAG_CLOSE (1 << 0)
+
+#define LITEPARSE_PATH_SEGMENT_FLAG_HAS_POINT (1 << 1)
+
+/**
+ * `LiteParsePageObject.bitmap_format` values.
  */
 #define LITEPARSE_BITMAP_FORMAT_UNKNOWN 0
 
@@ -133,22 +176,58 @@
 #define LITEPARSE_BITMAP_FORMAT_BGRA_PREMUL 5
 
 /**
- * Copy the image stream as stored (`FPDFImageObj_GetImageDataRaw`).
+ * `liteparse_document_page_objects` flag: copy the image stream as stored
+ * (`FPDFImageObj_GetImageDataRaw`).
  */
 #define LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_RAW (1 << 0)
 
 /**
- * Copy the stream after lossless filters (`FPDFImageObj_GetImageDataDecoded`).
+ * Flag: copy the stream after lossless filters
+ * (`FPDFImageObj_GetImageDataDecoded`).
  */
 #define LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_DECODED (1 << 1)
 
 /**
- * Copy the image's own pixels (`FPDFImageObj_GetBitmap`), not matrix-rendered.
+ * Flag: copy the image's own pixels (`FPDFImageObj_GetBitmap`), not
+ * matrix-rendered.
  */
 #define LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_BITMAP (1 << 2)
 
 /**
- * Values for `LiteParseFormTypeValue.value`.
+ * `LiteParsePageObjectPage.flags` bits.
+ */
+#define LITEPARSE_OBJECT_PAGE_FLAG_HAS_GEOMETRY (1 << 0)
+
+#define LITEPARSE_OBJECT_PAGE_FLAG_HAS_ROTATION (1 << 1)
+
+/**
+ * `LiteParseRawTextPage.flags` bits.
+ */
+#define LITEPARSE_RAW_PAGE_FLAG_HAS_GEOMETRY (1 << 0)
+
+#define LITEPARSE_RAW_PAGE_FLAG_HAS_ROTATION (1 << 1)
+
+/**
+ * `LiteParseRawTextItem.flags` bits.
+ */
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_GLYPH_NAMES (1 << 0)
+
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_GROUNDING_BOUNDS (1 << 1)
+
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_BASELINE_GAP (1 << 2)
+
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_MCID (1 << 3)
+
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_FILL_COLOR (1 << 4)
+
+#define LITEPARSE_RAW_ITEM_FLAG_HAS_STROKE_COLOR (1 << 5)
+
+#define LITEPARSE_RAW_ITEM_FLAG_FONT_IS_BUGGY (1 << 6)
+
+#define LITEPARSE_RAW_ITEM_FLAG_TRAILING_SPACE_GENERATED (1 << 7)
+
+/**
+ * `LiteParseResultView.form_type` values (PDFium `FPDF_FORMTYPE_*`).
  */
 #define LITEPARSE_FORM_TYPE_NONE 0
 
@@ -159,7 +238,7 @@
 #define LITEPARSE_FORM_TYPE_XFA_FOREGROUND 3
 
 /**
- * Reason bits reported in `LiteParsePageComplexity.reasons_mask`.
+ * `LiteParsePageComplexity.reasons` bits.
  */
 #define LITEPARSE_REASON_SCANNED (1 << 0)
 
@@ -176,7 +255,7 @@
 #define LITEPARSE_REASON_ANNOTATION_TEXT (1 << 6)
 
 /**
- * Reason bits reported in `LiteParsePageComplexity.layout_reasons_mask`.
+ * `LiteParsePageComplexity.layout_reasons` bits.
  */
 #define LITEPARSE_LAYOUT_REASON_MULTI_COLUMN (1 << 0)
 
@@ -184,104 +263,102 @@
 
 #define LITEPARSE_LAYOUT_REASON_DENSE_GRAPHICS (1 << 2)
 
-#define LITEPARSE_PROJECTED_LAYOUT_COORDINATES 1
+/**
+ * `LiteParsePageComplexity.flags` bits.
+ */
+#define LITEPARSE_COMPLEXITY_FLAG_HAS_SUBSTANTIAL_IMAGES (1 << 0)
 
-#define LITEPARSE_PROJECTED_ANCHOR_LEFT 0
+#define LITEPARSE_COMPLEXITY_FLAG_FULL_PAGE_IMAGE (1 << 1)
 
-#define LITEPARSE_PROJECTED_ANCHOR_RIGHT 1
+#define LITEPARSE_COMPLEXITY_FLAG_IS_GARBLED (1 << 2)
 
-#define LITEPARSE_PROJECTED_ANCHOR_CENTER 2
+#define LITEPARSE_COMPLEXITY_FLAG_NEEDS_OCR (1 << 3)
 
-#define LITEPARSE_PROJECTED_ANCHOR_FLOATING 3
+#define LITEPARSE_COMPLEXITY_FLAG_HAS_UNCOVERED_VECTOR_AREA (1 << 4)
 
-#define LITEPARSE_PROJECTED_REGION_NO_PARENT UINT64_MAX
+#define LITEPARSE_COMPLEXITY_FLAG_HAS_LAYOUT (1 << 5)
 
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA (1 << 0)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS (1 << 1)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES (1 << 2)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE (1 << 3)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE (1 << 4)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE (1 << 5)
-
-#define LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES (1 << 6)
-
-#define LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION 1
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE (1 << 0)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME (1 << 1)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID (1 << 2)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD (1 << 3)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC (1 << 4)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO (1 << 5)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE (1 << 6)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED (1 << 7)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_RTL (1 << 8)
-
-#define LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE (1 << 9)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE (1 << 0)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE (1 << 1)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE (1 << 2)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR (1 << 3)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS (1 << 4)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT (1 << 5)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT (1 << 6)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT (1 << 7)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT (1 << 8)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH (1 << 9)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY (1 << 10)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID (1 << 11)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED (1 << 12)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES (1 << 13)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS (1 << 14)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME (1 << 15)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK (1 << 16)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR (1 << 17)
-
-#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR (1 << 18)
-
-#define LITEPARSE_PROJECTED_REGION_FLAG_LEAF (1 << 0)
-
-#define LITEPARSE_PROJECTED_REGION_FLAG_SPLIT (1 << 1)
-
-#define LITEPARSE_PROJECTED_REGION_FLAG_HORIZONTAL (1 << 2)
-
-#define LITEPARSE_PROJECTED_REGION_FLAG_VERTICAL (1 << 3)
-
-#define LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION 1
+#define LITEPARSE_COMPLEXITY_FLAG_LAYOUT_IS_COMPLEX (1 << 6)
 
 /**
- * Values for `LiteParseStructureAttribute.kind`.
+ * `LiteParseTextItem.flags` bits.
+ */
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_SIZE (1 << 0)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_CONFIDENCE (1 << 1)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_FLAGS (1 << 2)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_HEIGHT (1 << 3)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_ASCENT (1 << 4)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_DESCENT (1 << 5)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_WEIGHT (1 << 6)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_TEXT_WIDTH (1 << 7)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_MCID (1 << 8)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_FILL_COLOR (1 << 9)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_HAS_STROKE_COLOR (1 << 10)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_STRIKE (1 << 11)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_UNICODE_MAP_ERROR (1 << 12)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_FONT_IS_BUGGY (1 << 13)
+
+#define LITEPARSE_TEXT_ITEM_FLAG_TRAILING_SPACE_GENERATED (1 << 14)
+
+/**
+ * `LiteParseGraphic.kind` values.
+ */
+#define LITEPARSE_GRAPHIC_STROKE 0
+
+#define LITEPARSE_GRAPHIC_RECT 1
+
+/**
+ * `LiteParseGraphic.flags` bits.
+ */
+#define LITEPARSE_GRAPHIC_FLAG_HAS_FILL_COLOR (1 << 0)
+
+#define LITEPARSE_GRAPHIC_FLAG_HAS_STROKE_COLOR (1 << 1)
+
+/**
+ * `LiteParseStructNode.flags` bits.
+ */
+#define LITEPARSE_STRUCT_NODE_FLAG_HAS_BBOX (1 << 0)
+
+/**
+ * `LiteParseAnnotation.flags` bits.
+ */
+#define LITEPARSE_ANNOTATION_FLAG_HAS_RECT (1 << 0)
+
+/**
+ * `LiteParseFormField.flags` bits.
+ */
+#define LITEPARSE_FORM_FIELD_FLAG_HAS_OBJECT_NUMBER (1 << 0)
+
+#define LITEPARSE_FORM_FIELD_FLAG_HAS_CONTROL_COUNT (1 << 1)
+
+#define LITEPARSE_FORM_FIELD_FLAG_HAS_CONTROL_INDEX (1 << 2)
+
+#define LITEPARSE_FORM_FIELD_FLAG_HAS_CHECKED (1 << 3)
+
+#define LITEPARSE_FORM_FIELD_FLAG_CHECKED (1 << 4)
+
+#define LITEPARSE_FORM_FIELD_FLAG_HAS_RECT (1 << 5)
+
+/**
+ * `LiteParseStructureNode.parent_index` for a root element.
+ */
+#define LITEPARSE_NO_PARENT UINT32_MAX
+
+/**
+ * `LiteParseStructureAttribute.kind` values.
  */
 #define LITEPARSE_STRUCTURE_ATTR_BOOL 0
 
@@ -289,6 +366,224 @@
 
 #define LITEPARSE_STRUCTURE_ATTR_STRING 2
 
+/**
+ * `LiteParseLayoutBlock.kind` values.
+ */
+#define LITEPARSE_BLOCK_HEADING 0
+
+#define LITEPARSE_BLOCK_PARAGRAPH 1
+
+#define LITEPARSE_BLOCK_LIST_ITEM 2
+
+#define LITEPARSE_BLOCK_CODE 3
+
+#define LITEPARSE_BLOCK_TABLE 4
+
+#define LITEPARSE_BLOCK_MERGED_TABLE 5
+
+#define LITEPARSE_BLOCK_GRID_FALLBACK 6
+
+#define LITEPARSE_BLOCK_RULE 7
+
+#define LITEPARSE_BLOCK_FIGURE 8
+
+/**
+ * A kind this binding does not know; rejected on input.
+ */
+#define LITEPARSE_BLOCK_UNKNOWN 9
+
+/**
+ * `LiteParseLayoutBlock.flags` bits.
+ */
+#define LITEPARSE_BLOCK_FLAG_HAS_LEVEL (1 << 0)
+
+#define LITEPARSE_BLOCK_FLAG_BOLD (1 << 1)
+
+#define LITEPARSE_BLOCK_FLAG_ITALIC (1 << 2)
+
+#define LITEPARSE_BLOCK_FLAG_HAS_ORDERED (1 << 3)
+
+#define LITEPARSE_BLOCK_FLAG_ORDERED (1 << 4)
+
+#define LITEPARSE_BLOCK_FLAG_HAS_BBOX (1 << 5)
+
+#define LITEPARSE_BLOCK_FLAG_HAS_HEADER_ROWS (1 << 6)
+
+#define LITEPARSE_BLOCK_FLAG_HAS_HEADER (1 << 7)
+
+/**
+ * `LiteParseLayoutCell.flags` bits.
+ */
+#define LITEPARSE_CELL_FLAG_HAS_BBOX (1 << 0)
+
+/**
+ * `LiteParseVectorShape.flags` / `LiteParseVectorLine.flags` bits.
+ */
+#define LITEPARSE_VECTOR_FLAG_STROKE (1 << 0)
+
+#define LITEPARSE_VECTOR_FLAG_FILL (1 << 1)
+
+#define LITEPARSE_VECTOR_FLAG_HAS_STROKE_COLOR (1 << 2)
+
+#define LITEPARSE_VECTOR_FLAG_HAS_FILL_COLOR (1 << 3)
+
+#define LITEPARSE_VECTOR_FLAG_HAS_CURVE (1 << 4)
+
+#define LITEPARSE_VECTOR_FLAG_HAS_STROKE_WIDTH (1 << 5)
+
+/**
+ * `LiteParseOutlineEntry.flags` bits.
+ */
+#define LITEPARSE_OUTLINE_FLAG_HAS_Y_PDF (1 << 0)
+
+/**
+ * `LiteParseXfaPacket.flags` bits.
+ */
+#define LITEPARSE_XFA_FLAG_HAS_CONTENT (1 << 0)
+
+/**
+ * `LiteParseDocumentMeta.flags` bits.
+ */
+#define LITEPARSE_DOC_META_FLAG_HAS_FILE_VERSION (1 << 0)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_IS_ENCRYPTED (1 << 1)
+
+#define LITEPARSE_DOC_META_FLAG_IS_ENCRYPTED (1 << 2)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_SECURITY_HANDLER_REVISION (1 << 3)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_PERMISSIONS (1 << 4)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_EOF_SECTION_COUNT (1 << 5)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_STARTXREF_COUNT (1 << 6)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_TRAILER_ID_PAIR_DIFFERS (1 << 7)
+
+#define LITEPARSE_DOC_META_FLAG_TRAILER_ID_PAIR_DIFFERS (1 << 8)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_RAW_FILE_SIZE (1 << 9)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_XMP_TRUNCATED (1 << 10)
+
+#define LITEPARSE_DOC_META_FLAG_XMP_TRUNCATED (1 << 11)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_SIGNATURE_COUNT (1 << 12)
+
+#define LITEPARSE_DOC_META_FLAG_HAS_SIGNATURE_BYTE_RANGE_REACHES_EOF (1 << 13)
+
+#define LITEPARSE_DOC_META_FLAG_SIGNATURE_BYTE_RANGE_REACHES_EOF (1 << 14)
+
+/**
+ * `LiteParseScreenshot.flags` bits.
+ */
+#define LITEPARSE_SCREENSHOT_FLAG_SOLID_FILL (1 << 0)
+
+/**
+ * `LiteParseScreenshotRect.flags` bits.
+ */
+#define LITEPARSE_SCREENSHOT_RECT_FLAG_IS_LINE (1 << 0)
+
+#define LITEPARSE_SCREENSHOT_RECT_FLAG_HAS_COLOR (1 << 1)
+
+/**
+ * `LiteParseProjectedLine.anchor` values.
+ */
+#define LITEPARSE_ANCHOR_LEFT 0
+
+#define LITEPARSE_ANCHOR_RIGHT 1
+
+#define LITEPARSE_ANCHOR_CENTER 2
+
+#define LITEPARSE_ANCHOR_FLOATING 3
+
+/**
+ * `LiteParseProjectedLine.flags` bits.
+ */
+#define LITEPARSE_LINE_FLAG_HAS_HEADING_FONT_SIZE (1 << 0)
+
+#define LITEPARSE_LINE_FLAG_HAS_MCID (1 << 1)
+
+#define LITEPARSE_LINE_FLAG_ALL_BOLD (1 << 2)
+
+#define LITEPARSE_LINE_FLAG_ALL_ITALIC (1 << 3)
+
+#define LITEPARSE_LINE_FLAG_ALL_MONO (1 << 4)
+
+#define LITEPARSE_LINE_FLAG_ALL_STRIKE (1 << 5)
+
+#define LITEPARSE_LINE_FLAG_FONT_SIZE_ESTIMATED (1 << 6)
+
+#define LITEPARSE_LINE_FLAG_RTL (1 << 7)
+
+#define LITEPARSE_LINE_FLAG_IN_FIGURE (1 << 8)
+
+/**
+ * `LiteParseProjectedRegion.flags` bits.
+ */
+#define LITEPARSE_REGION_FLAG_LEAF (1 << 0)
+
+#define LITEPARSE_REGION_FLAG_SPLIT (1 << 1)
+
+#define LITEPARSE_REGION_FLAG_HORIZONTAL (1 << 2)
+
+#define LITEPARSE_REGION_FLAG_VERTICAL (1 << 3)
+
+/**
+ * `LiteParsePage.flags` bits. The `HAS_*` collection bits distinguish
+ * "extraction enabled, none found" from "extraction disabled".
+ */
+#define LITEPARSE_PAGE_FLAG_HAS_GEOMETRY (1 << 0)
+
+#define LITEPARSE_PAGE_FLAG_HAS_ROTATION (1 << 1)
+
+#define LITEPARSE_PAGE_FLAG_HAS_CONTENT_BOUNDS (1 << 2)
+
+#define LITEPARSE_PAGE_FLAG_HAS_COMPLEXITY (1 << 3)
+
+#define LITEPARSE_PAGE_FLAG_HAS_ANNOTATIONS (1 << 4)
+
+#define LITEPARSE_PAGE_FLAG_HAS_FORM_FIELDS (1 << 5)
+
+#define LITEPARSE_PAGE_FLAG_HAS_STRUCTURE_TREE (1 << 6)
+
+#define LITEPARSE_PAGE_FLAG_HAS_BLOCKS (1 << 7)
+
+#define LITEPARSE_PAGE_FLAG_HAS_VECTOR_GRAPHICS (1 << 8)
+
+/**
+ * `LiteParseResultView.flags` bits.
+ */
+#define LITEPARSE_RESULT_FLAG_HAS_DOC_META (1 << 0)
+
+#define LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE (1 << 1)
+
+#define LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS (1 << 2)
+
+/**
+ * Text metadata extraction was requested in the parser configuration.
+ */
+#define LITEPARSE_RESULT_FLAG_TEXT_METADATA (1 << 3)
+
+/**
+ * Produced by `liteparse_document_extract`: no projection, text, or Markdown.
+ */
+#define LITEPARSE_RESULT_FLAG_EXTRACT_ONLY (1 << 4)
+
+/**
+ * Extraction flattened at least one page to recover form-widget text; see
+ * `flattened_page_numbers`.
+ */
+#define LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS (1 << 5)
+
+/**
+ * `liteparse_result_search` flags.
+ */
+#define LITEPARSE_SEARCH_FLAG_CASE_SENSITIVE (1 << 0)
+
+/**
+ * Per-page complexity signals. Views borrow from the handle.
+ */
 typedef struct LiteParseComplexity LiteParseComplexity;
 
 /**
@@ -298,17 +593,12 @@ typedef struct LiteParseComplexity LiteParseComplexity;
 typedef struct LiteParseDocument LiteParseDocument;
 
 /**
- * Pre-projection pages from `extract_pages_and_images`. Views borrow here.
- */
-typedef struct LiteParseExtract LiteParseExtract;
-
-/**
  * Valid only during the callback that receives it.
  */
 typedef struct LiteParseOcrSink LiteParseOcrSink;
 
 /**
- * Unfiltered page content objects. Views borrow from this handle.
+ * Unfiltered page content objects. Views borrow from the handle.
  */
 typedef struct LiteParsePageObjects LiteParsePageObjects;
 
@@ -319,27 +609,40 @@ typedef struct LiteParsePageObjects LiteParsePageObjects;
 typedef struct LiteParseParser LiteParseParser;
 
 /**
- * A document's heuristic-free text runs. Views borrow from this handle.
+ * Heuristic-free text runs. Views borrow from the handle.
  */
 typedef struct LiteParseRawText LiteParseRawText;
 
+/**
+ * A parse or extract result. Views borrow from it until it is freed.
+ */
 typedef struct LiteParseResult LiteParseResult;
 
+/**
+ * Rendered pages. Views borrow from the handle until it is freed.
+ */
 typedef struct LiteParseScreenshots LiteParseScreenshots;
 
+/**
+ * Phrase matches copied out of a result; they outlive it.
+ */
 typedef struct LiteParseSearchMatches LiteParseSearchMatches;
 
 /**
  * Per-page OCR and layout complexity signals.
  */
 typedef struct {
-  size_t page_number;
-  size_t text_length;
+  uint32_t page_number;
+  /**
+   * `LITEPARSE_COMPLEXITY_FLAG_*` bits.
+   */
+  uint32_t flags;
+  uint32_t text_length;
+  uint32_t image_block_count;
   /**
    * Fraction of page area covered by native text.
    */
   float text_coverage;
-  size_t image_block_count;
   /**
    * Summed image-bbox coverage, clamped to 1.0.
    */
@@ -351,43 +654,41 @@ typedef struct {
   float page_area;
   float uncovered_vector_area;
   /**
-   * `LITEPARSE_REASON_*` bits explaining `needs_ocr`.
+   * `LITEPARSE_REASON_*` bits explaining `NEEDS_OCR`.
    */
-  uint32_t reasons_mask;
+  uint32_t reasons;
   /**
    * Side-by-side columns; 1 means a single column.
    */
-  size_t layout_column_count;
-  size_t layout_ruled_table_count;
+  uint32_t layout_column_count;
+  uint32_t layout_ruled_table_count;
   /**
    * Borderless table runs found by track alignment. Overlaps
    * `layout_ruled_table_count`; the two must not be summed.
    */
-  size_t layout_text_table_run_count;
-  size_t layout_figure_count;
-  /**
-   * Combined validated ruled-table area over page area, clamped to 1.0.
-   */
+  uint32_t layout_text_table_run_count;
+  uint32_t layout_figure_count;
   float layout_ruled_table_coverage;
-  /**
-   * Combined figure area over page area, clamped to 1.0.
-   */
   float layout_figure_coverage;
   /**
-   * `LITEPARSE_LAYOUT_REASON_*` bits explaining `layout_is_complex`.
+   * `LITEPARSE_LAYOUT_REASON_*` bits explaining `LAYOUT_IS_COMPLEX`.
    */
-  uint32_t layout_reasons_mask;
-  bool has_substantial_images;
-  bool full_page_image;
-  bool is_garbled;
-  bool needs_ocr;
-  bool has_uncovered_vector_area;
-  bool has_layout;
-  bool layout_is_complex;
+  uint32_t layout_reasons;
 } LiteParsePageComplexity;
 
+typedef struct {
+  const LiteParsePageComplexity *pages;
+  size_t pages_len;
+} LiteParseComplexityView;
+
 /**
- * Borrowed, non-NUL-terminated bytes valid while the owner lives.
+ * Fixed-width status code returned by fallible API functions.
+ */
+typedef uint32_t LiteParseStatus;
+
+/**
+ * Borrowed, non-NUL-terminated bytes valid while their owner lives. Absent
+ * and empty are both a null pointer with zero length.
  */
 typedef struct {
   const uint8_t *ptr;
@@ -404,36 +705,40 @@ typedef struct {
 
 /**
  * One per-page orientation correction: `page` is 1-based, `angle` is the
- * clockwise degrees (0/90/180/270) the content appears rotated. Copied by
- * `liteparse_parser_new`; out-of-range pages are ignored like core.
+ * clockwise degrees (0/90/180/270) the content appears rotated. Out-of-range
+ * pages are ignored like core.
  */
 typedef struct {
   uint32_t page;
-  uint16_t angle;
+  uint32_t angle;
 } LiteParsePageOrientationCorrection;
 
 /**
- * Start with `liteparse_config_default`; parser creation copies all views.
+ * Start with `liteparse_config_init`; parser creation copies all views.
  */
 typedef struct {
   /**
    * Must equal `sizeof(LiteParseConfig)`.
    */
   size_t size_of_config;
+  /**
+   * Core booleans: a bit in `bools_set` selects the field, the same bit in
+   * `bools_values` gives its value. Unset bits keep the native default.
+   */
   uint64_t bools_set;
   uint64_t bools_values;
   /**
-   * Zero keeps the native default (1000).
+   * `LITEPARSE_CONFIG_FLAG_*` bits.
    */
-  size_t max_pages;
+  uint32_t flags;
   /**
-   * Zero keeps the native default.
+   * `LITEPARSE_UNSET` keeps the native default (1000); zero parses no pages.
    */
-  size_t num_workers;
+  uint32_t max_pages;
   /**
-   * Zero keeps the native default; nonzero values must be finite and > 0.
+   * `LITEPARSE_UNSET` keeps the native default.
    */
-  float dpi;
+  uint32_t num_workers;
   /**
    * `LITEPARSE_UNSET` keeps the native default.
    */
@@ -443,378 +748,32 @@ typedef struct {
    */
   uint32_t image_mode;
   /**
-   * Normalized fractions ordered top, right, bottom, left. When
-   * `has_crop_box` is set every value must lie in `[0, 1]` with
-   * `top + bottom < 1` and `left + right < 1`.
+   * Zero keeps the native default; nonzero values must be finite and > 0.
+   */
+  float dpi;
+  /**
+   * Normalized fractions ordered top, right, bottom, left, applied when
+   * `LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX` is set. Every value must lie in
+   * `[0, 1]` with `top + bottom < 1` and `left + right < 1`.
    */
   float crop_box[4];
-  bool has_crop_box;
   LiteParseByteView ocr_language;
   LiteParseByteView ocr_server_url;
   LiteParseByteView tessdata_path;
   LiteParseByteView password;
   LiteParseByteView image_output_dir;
-  const LiteParseHeader *ocr_server_headers;
-  size_t ocr_server_headers_len;
-  const uint64_t *ocr_hedge_delays_ms;
-  size_t ocr_hedge_delays_ms_len;
   /**
    * Optional `%02x%02x.msgpack` glyph-database directory. An explicit path
    * overrides `LITEPARSE_FONT_DB_DIR`.
    */
   LiteParseByteView font_db_dir;
-  /**
-   * Per-page orientation corrections, copied during `liteparse_parser_new`.
-   * Null with zero length means none.
-   */
+  const LiteParseHeader *ocr_server_headers;
+  size_t ocr_server_headers_len;
+  const uint64_t *ocr_hedge_delays_ms;
+  size_t ocr_hedge_delays_ms_len;
   const LiteParsePageOrientationCorrection *orientation_corrections;
   size_t orientation_corrections_len;
 } LiteParseConfig;
-
-/**
- * One caller-supplied page. Offset/count pairs index the shared arrays on
- * `LiteParseContent`.
- */
-typedef struct {
-  /**
-   * 1-based source page number.
-   */
-  uint32_t page_number;
-  float page_width;
-  float page_height;
-  size_t item_offset;
-  size_t item_count;
-  size_t graphic_offset;
-  size_t graphic_count;
-  size_t struct_offset;
-  size_t struct_count;
-  size_t image_ref_offset;
-  size_t image_ref_count;
-  size_t block_offset;
-  size_t block_count;
-  /**
-   * Empty view means the host supplied no `/PageLabels` entry.
-   */
-  LiteParseByteView page_label;
-} LiteParseContentPage;
-
-/**
- * Borrows data from its result handle. Rich metadata requires
- * `LITEPARSE_FLAG_EXTRACT_TEXT_METADATA`. As parse-content input the same
- * layout is filled by the caller; views are copied during the call.
- */
-typedef struct {
-  LiteParseByteView text;
-  LiteParseByteView font_name;
-  LiteParseByteView link;
-  float x;
-  float y;
-  float width;
-  float height;
-  float rotation;
-  float font_size;
-  float confidence;
-  int32_t font_flags;
-  float font_height;
-  float font_ascent;
-  float font_descent;
-  int32_t font_weight;
-  float text_width;
-  int32_t mcid;
-  /**
-   * ARGB hex strings such as "ff000000".
-   */
-  LiteParseByteView fill_color;
-  LiteParseByteView stroke_color;
-  /**
-   * Borrowed raw content-stream character codes.
-   */
-  const uint32_t *char_codes;
-  size_t char_codes_len;
-  /**
-   * Range into `LiteParseContent.words` when this item is content input.
-   * Result accessors leave these zero and use `liteparse_result_word_boxes`.
-   */
-  size_t word_offset;
-  size_t word_count;
-  bool has_font_size;
-  bool has_confidence;
-  bool strike;
-  bool has_unicode_map_error;
-  bool has_font_flags;
-  bool has_font_height;
-  bool has_font_ascent;
-  bool has_font_descent;
-  bool has_font_weight;
-  bool has_text_width;
-  bool font_is_buggy;
-  bool has_font_is_buggy;
-  bool has_mcid;
-  bool trailing_space_generated;
-  bool has_trailing_space_generated;
-} LiteParseTextItem;
-
-/**
- * A rectangle in top-left-origin 72-DPI viewport space.
- */
-typedef struct {
-  float x;
-  float y;
-  float width;
-  float height;
-} LiteParseRect;
-
-/**
- * A layout graphic in the same viewport space as the page's text items.
- */
-typedef struct {
-  /**
-   * `LITEPARSE_GRAPHIC_STROKE` or `LITEPARSE_GRAPHIC_RECT`.
-   */
-  uint32_t kind;
-  float x1;
-  float y1;
-  float x2;
-  float y2;
-  LiteParseRect bbox;
-  LiteParseByteView stroke_color;
-  LiteParseByteView fill_color;
-  float line_width;
-  bool has_fill;
-  bool has_stroke;
-} LiteParseContentGraphic;
-
-/**
- * One classified layout block. Variant-specific fields that do not apply to
- * `kind` carry their absent encoding (`has_*` false, null views).
- *
- * Table geometry: `header_cell_offset/count` indexes the page's packed cell
- * array; `first_row/row_count` indexes the packed row array from
- * `liteparse_result_block_rows`. Verbatim source lines (`code`,
- * `grid_fallback`) live in the packed line array from
- * `liteparse_result_block_lines`, indexed by `line_offset/line_count`.
- * `merged_table` stores every row in that row range (header rows first,
- * counted by `header_rows`) and puts colspan/rowspan on each cell.
- */
-typedef struct {
-  /**
-   * One of `heading`, `paragraph`, `list_item`, `code`, `table`,
-   * `merged_table`, `grid_fallback`, `rule`, `figure`.
-   */
-  LiteParseByteView kind;
-  LiteParseByteView text;
-  /**
-   * Heading level (1-6), or list nesting depth.
-   */
-  uint8_t level;
-  LiteParseByteView marker;
-  LiteParseByteView lang;
-  size_t line_offset;
-  size_t line_count;
-  size_t header_cell_offset;
-  size_t header_cell_count;
-  size_t first_row;
-  size_t row_count;
-  /**
-   * `merged_table`: how many leading rows of the packed row range are header.
-   */
-  size_t header_rows;
-  /**
-   * Figure image id and encoded format.
-   */
-  LiteParseByteView id;
-  LiteParseByteView format;
-  LiteParseRect bbox;
-  bool has_level;
-  bool bold;
-  bool italic;
-  bool ordered;
-  bool has_ordered;
-  bool has_bbox;
-  bool has_header_rows;
-} LiteParseLayoutBlock;
-
-typedef struct {
-  LiteParseByteView text;
-  LiteParseRect bbox;
-  /**
-   * Merge span; `0` or `1` means a single cell. Packed from `merged_table`.
-   */
-  uint16_t colspan;
-  uint16_t rowspan;
-  bool has_bbox;
-} LiteParseLayoutCell;
-
-/**
- * Row range into `liteparse_result_block_cells`.
- */
-typedef struct {
-  size_t cell_offset;
-  size_t cell_count;
-} LiteParseLayoutRow;
-
-/**
- * One outline entry (bookmark). `page_index` is zero-based and `-1` when the
- * destination is not a page; `y_pdf` is PDF user space.
- */
-typedef struct {
-  uint8_t level;
-  LiteParseByteView title;
-  int32_t page_index;
-  float y_pdf;
-  bool has_y_pdf;
-} LiteParseOutlineEntry;
-
-/**
- * Word box in top-left-origin 72-DPI page space.
- */
-typedef struct {
-  LiteParseByteView text;
-  float x;
-  float y;
-  float width;
-  float height;
-} LiteParseWordBox;
-
-/**
- * One pre-order structure-tree node used for heading and figure detection.
- */
-typedef struct {
-  LiteParseByteView role;
-  LiteParseByteView alt_text;
-  const int32_t *mcids;
-  size_t mcids_len;
-  LiteParseRect bbox;
-  bool has_bbox;
-} LiteParseStructNode;
-
-/**
- * Per-page image object. Present even when decoded bytes were not requested.
- */
-typedef struct {
-  LiteParseByteView id;
-  LiteParseByteView format;
-  LiteParseRect bbox;
-  size_t obj_index;
-  uint32_t pixel_width;
-  uint32_t pixel_height;
-  float rotation;
-} LiteParseImageRef;
-
-/**
- * Packed caller-supplied pages for `liteparse_parser_parse_content`.
- *
- * Begin with `liteparse_content_default()`. All views and arrays are copied
- * during the call. Leave the block arrays empty to run projection (and, when
- * configured, classification). Any per-page or document-level block range
- * uses the supplied structure for Markdown instead of classifying.
- */
-typedef struct {
-  /**
-   * Must equal `sizeof(LiteParseContent)`.
-   */
-  size_t size_of_content;
-  const LiteParseContentPage *pages;
-  size_t pages_len;
-  const LiteParseTextItem *items;
-  size_t items_len;
-  const LiteParseContentGraphic *graphics;
-  size_t graphics_len;
-  const LiteParseLayoutBlock *blocks;
-  size_t blocks_len;
-  const LiteParseLayoutCell *cells;
-  size_t cells_len;
-  const LiteParseLayoutRow *rows;
-  size_t rows_len;
-  const LiteParseByteView *lines;
-  size_t lines_len;
-  const LiteParseOutlineEntry *outline;
-  size_t outline_len;
-  const LiteParseWordBox *words;
-  size_t words_len;
-  const LiteParseStructNode *struct_nodes;
-  size_t struct_nodes_len;
-  const LiteParseImageRef *image_refs;
-  size_t image_refs_len;
-  /**
-   * Range into `blocks` for document-wide structure (`all_blocks`).
-   */
-  size_t document_block_offset;
-  size_t document_block_count;
-} LiteParseContent;
-
-/**
- * Fixed-width status code returned by fallible API functions.
- */
-typedef uint32_t LiteParseStatus;
-
-/**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseResult *handle;
-} LiteParseResultNew;
-
-/**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseDocument *handle;
-} LiteParseDocumentNew;
-
-/**
- * Status and handle returned by screenshot renders. The handle is null
- * unless the status is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseScreenshots *handle;
-} LiteParseScreenshotsNew;
-
-/**
- * Page region in top-left-origin viewport points. Must fit within the page.
- */
-typedef struct {
-  float x;
-  float y;
-  float width;
-  float height;
-} LiteParseRenderRegion;
-
-/**
- * Status and handle returned by complexity analysis. The handle is null
- * unless the status is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseComplexity *handle;
-} LiteParseComplexityNew;
-
-/**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseRawText *handle;
-} LiteParseRawTextNew;
-
-/**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParseExtract *handle;
-} LiteParseExtractNew;
-
-/**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
- */
-typedef struct {
-  LiteParseStatus status;
-  LiteParsePageObjects *handle;
-} LiteParsePageObjectsNew;
 
 /**
  * Visible PDF box in bottom-left-origin page space, before `user_unit`.
@@ -829,28 +788,188 @@ typedef struct {
    */
   float user_unit;
   /**
-   * Clockwise quarter turns, `0..=3`. Zero is an ordinary rotation, so
-   * absence is `has_rotation`, never this field.
+   * Clockwise quarter turns, `0..=3`; meaningful only with
+   * `LITEPARSE_PAGE_FLAG_HAS_ROTATION`.
    */
   uint32_t rotation_quarter_turns;
-  bool has_rotation;
 } LiteParsePageGeometry;
 
 /**
- * Optional page geometry; present values are finite with positive `user_unit`.
+ * A rectangle in top-left-origin 72-DPI viewport space.
  */
 typedef struct {
-  LiteParsePageGeometry geometry;
-  bool present;
-} LiteParsePageGeometryValue;
-
-typedef struct {
-  LiteParseRect rect;
-  bool present;
-} LiteParseRectValue;
+  float x;
+  float y;
+  float width;
+  float height;
+} LiteParseRect;
 
 /**
- * Extracted image borrowing data from its result handle.
+ * One page. Ranges index the flat arrays of the owning view; result-only
+ * ranges (`figure_*`, `item_frame_*`, `projected_line_*`, `region_*`) are
+ * zero on extract and content input. `text`/`markdown` are output only.
+ */
+typedef struct {
+  /**
+   * 1-based source page number.
+   */
+  uint32_t page_number;
+  /**
+   * `LITEPARSE_PAGE_FLAG_*` bits.
+   */
+  uint32_t flags;
+  /**
+   * Viewport size in 72-DPI points.
+   */
+  float width;
+  float height;
+  /**
+   * The PDF `/PageLabels` entry, or a null view.
+   */
+  LiteParseByteView label;
+  LiteParseByteView text;
+  LiteParseByteView markdown;
+  LiteParsePageGeometry geometry;
+  LiteParseRect content_bounds;
+  LiteParsePageComplexity complexity;
+  uint32_t item_offset;
+  uint32_t item_count;
+  uint32_t graphic_offset;
+  uint32_t graphic_count;
+  uint32_t struct_node_offset;
+  uint32_t struct_node_count;
+  uint32_t image_ref_offset;
+  uint32_t image_ref_count;
+  uint32_t annotation_offset;
+  uint32_t annotation_count;
+  uint32_t form_field_offset;
+  uint32_t form_field_count;
+  uint32_t structure_node_offset;
+  uint32_t structure_node_count;
+  uint32_t block_offset;
+  uint32_t block_count;
+  uint32_t vector_shape_offset;
+  uint32_t vector_shape_count;
+  uint32_t vector_line_offset;
+  uint32_t vector_line_count;
+  uint32_t figure_offset;
+  uint32_t figure_count;
+  uint32_t item_frame_offset;
+  uint32_t item_frame_count;
+  uint32_t projected_line_offset;
+  uint32_t projected_line_count;
+  uint32_t region_offset;
+  uint32_t region_count;
+} LiteParsePage;
+
+/**
+ * One text item. Used for page items, projected spans, search matches, and
+ * caller-supplied content. Ranges index the owning view's `words` and
+ * `char_codes` arrays.
+ */
+typedef struct {
+  LiteParseByteView text;
+  LiteParseByteView font_name;
+  LiteParseByteView link;
+  float x;
+  float y;
+  float width;
+  float height;
+  float rotation;
+  float font_size;
+  float confidence;
+  float font_height;
+  float font_ascent;
+  float font_descent;
+  float text_width;
+  int32_t font_flags;
+  int32_t font_weight;
+  int32_t mcid;
+  /**
+   * Packed ARGB.
+   */
+  uint32_t fill_color;
+  uint32_t stroke_color;
+  uint32_t char_code_offset;
+  uint32_t char_code_count;
+  uint32_t word_offset;
+  uint32_t word_count;
+  /**
+   * `LITEPARSE_TEXT_ITEM_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseTextItem;
+
+/**
+ * Word box in top-left-origin 72-DPI page space.
+ */
+typedef struct {
+  LiteParseByteView text;
+  float x;
+  float y;
+  float width;
+  float height;
+} LiteParseWordBox;
+
+/**
+ * A layout graphic primitive in viewport space. Strokes use `x1..y2` and
+ * `line_width`; rects use `bbox`.
+ */
+typedef struct {
+  /**
+   * `LITEPARSE_GRAPHIC_*`.
+   */
+  uint32_t kind;
+  /**
+   * `LITEPARSE_GRAPHIC_FLAG_*` bits.
+   */
+  uint32_t flags;
+  float x1;
+  float y1;
+  float x2;
+  float y2;
+  float line_width;
+  LiteParseRect bbox;
+  uint32_t fill_color;
+  uint32_t stroke_color;
+} LiteParseGraphic;
+
+/**
+ * One pre-order structure-tree node used for heading and figure detection.
+ * `mcid_offset/count` index the view's `mcids` array.
+ */
+typedef struct {
+  LiteParseByteView role;
+  LiteParseByteView alt_text;
+  LiteParseRect bbox;
+  uint32_t mcid_offset;
+  uint32_t mcid_count;
+  /**
+   * `LITEPARSE_STRUCT_NODE_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseStructNode;
+
+/**
+ * Per-page raster image object, present even when bytes were not extracted.
+ */
+typedef struct {
+  LiteParseByteView id;
+  LiteParseByteView format;
+  LiteParseRect bbox;
+  uint32_t obj_index;
+  uint32_t pixel_width;
+  uint32_t pixel_height;
+  uint32_t bits_per_pixel;
+  /**
+   * An `FPDF_COLORSPACE_*` value.
+   */
+  int32_t colorspace;
+  float rotation;
+} LiteParseImageRef;
+
+/**
+ * Extracted image with encoded bytes.
  */
 typedef struct {
   LiteParseByteView id;
@@ -858,29 +977,17 @@ typedef struct {
   LiteParseByteView path;
   LiteParseByteView format;
   LiteParseByteView duplicate_of;
+  LiteParseByteView bytes;
+  LiteParseRect bbox;
   uint32_t page;
   uint32_t width;
   uint32_t height;
   float rotation;
-  LiteParseRect bbox;
-  LiteParseByteView bytes;
 } LiteParseImage;
 
-typedef struct {
-  uint32_t page_number;
-  LiteParseByteView message;
-} LiteParsePageError;
-
-typedef struct {
-  /**
-   * One of the `LITEPARSE_FORM_TYPE_*` values.
-   */
-  int32_t value;
-  bool present;
-} LiteParseFormTypeValue;
-
 /**
- * Page annotation borrowing strings from its result handle.
+ * Page or structure-node annotation. `quadpoint_offset/count` index the
+ * view's `quadpoints` array.
  */
 typedef struct {
   LiteParseByteView subtype;
@@ -890,16 +997,16 @@ typedef struct {
   LiteParseByteView title;
   LiteParseByteView uri;
   LiteParseRect rect;
+  uint32_t quadpoint_offset;
+  uint32_t quadpoint_count;
   /**
-   * Number of quadpoint rectangles; fetch them with
-   * `liteparse_result_annotation_quadpoints`.
+   * `LITEPARSE_ANNOTATION_FLAG_*` bits.
    */
-  size_t quadpoint_count;
-  bool has_rect;
+  uint32_t flags;
 } LiteParseAnnotation;
 
 /**
- * AcroForm widget borrowing strings from its result handle.
+ * AcroForm widget. Option ranges index the view's `strings` array.
  */
 typedef struct {
   LiteParseByteView id;
@@ -908,6 +1015,7 @@ typedef struct {
   LiteParseByteView alternate_name;
   LiteParseByteView value;
   LiteParseByteView export_value;
+  LiteParseRect rect;
   uint32_t page;
   int32_t annotation_index;
   int32_t widget_index;
@@ -915,23 +1023,21 @@ typedef struct {
   int32_t field_flags;
   int32_t control_count;
   int32_t control_index;
-  LiteParseRect rect;
-  size_t options_len;
-  size_t selected_options_len;
-  bool has_object_number;
-  bool has_control_count;
-  bool has_control_index;
-  bool checked;
-  bool has_checked;
-  bool has_rect;
+  uint32_t option_offset;
+  uint32_t option_count;
+  uint32_t selected_option_offset;
+  uint32_t selected_option_count;
+  /**
+   * `LITEPARSE_FORM_FIELD_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseFormField;
 
 /**
- * One node of a page's structure tree, pre-flattened in pre-order
- * (parent before children). `parent_index` is `-1` for roots. Attribute and
- * annotation ranges index into the flattened arrays returned by
- * `liteparse_result_structure_attributes` / `_annotations`; marked-content
- * ids point into storage owned by the result handle.
+ * One tagged-PDF structure element, flattened in pre-order (parent before
+ * children). `parent_index` is an absolute index into the view's
+ * `structure_nodes` array or `LITEPARSE_NO_PARENT`. Ranges index the view's
+ * `mcids`, `structure_attributes`, and `annotations` arrays.
  */
 typedef struct {
   LiteParseByteView element_type;
@@ -939,44 +1045,101 @@ typedef struct {
   LiteParseByteView actual_text;
   LiteParseByteView alt_text;
   LiteParseByteView title;
-  /**
-   * Index of the parent node in the same slice, or -1 for a root.
-   */
-  int32_t parent_index;
+  uint32_t parent_index;
   /**
    * Nesting depth, 0 for roots.
    */
   uint32_t depth;
-  /**
-   * Range into the flattened id array from
-   * `liteparse_result_structure_marked_content_ids`.
-   */
-  size_t marked_content_id_offset;
-  size_t marked_content_ids_len;
-  size_t attribute_offset;
-  size_t attribute_count;
-  size_t annotation_offset;
-  size_t annotation_count;
+  uint32_t mcid_offset;
+  uint32_t mcid_count;
+  uint32_t attribute_offset;
+  uint32_t attribute_count;
+  uint32_t annotation_offset;
+  uint32_t annotation_count;
 } LiteParseStructureNode;
 
+/**
+ * One `/A` attribute. Booleans are `kind == BOOL` with `number` 0 or 1.
+ */
 typedef struct {
   LiteParseByteView name;
+  LiteParseByteView string;
   /**
-   * One of the `LITEPARSE_STRUCTURE_ATTR_*` values.
+   * `LITEPARSE_STRUCTURE_ATTR_*`.
    */
   uint32_t kind;
-  float number_value;
-  LiteParseByteView string_value;
-  bool bool_value;
+  float number;
 } LiteParseStructureAttribute;
+
+/**
+ * One classified layout block. Fields that do not apply to `kind` carry
+ * their absent encoding. Tables: `header_cell_offset/count` and each row's
+ * `cell_offset/count` index `cells`; `row_offset/count` index `rows`.
+ * `merged_table` stores header rows first (`header_rows` of them) and puts
+ * colspan/rowspan on each cell. `code`/`grid_fallback` lines are
+ * `line_offset/count` into `strings`.
+ */
+typedef struct {
+  LiteParseByteView text;
+  LiteParseByteView marker;
+  LiteParseByteView lang;
+  /**
+   * Figure image id and encoded format.
+   */
+  LiteParseByteView id;
+  LiteParseByteView format;
+  LiteParseRect bbox;
+  /**
+   * `LITEPARSE_BLOCK_*`.
+   */
+  uint32_t kind;
+  /**
+   * `LITEPARSE_BLOCK_FLAG_*` bits.
+   */
+  uint32_t flags;
+  /**
+   * Heading level (1-6), or list nesting depth.
+   */
+  uint32_t level;
+  uint32_t line_offset;
+  uint32_t line_count;
+  uint32_t header_cell_offset;
+  uint32_t header_cell_count;
+  uint32_t row_offset;
+  uint32_t row_count;
+  uint32_t header_rows;
+} LiteParseLayoutBlock;
+
+typedef struct {
+  LiteParseByteView text;
+  LiteParseRect bbox;
+  /**
+   * Merge span; `0` or `1` means a single cell.
+   */
+  uint32_t colspan;
+  uint32_t rowspan;
+  /**
+   * `LITEPARSE_CELL_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseLayoutCell;
+
+/**
+ * Row range into `cells`.
+ */
+typedef struct {
+  uint32_t cell_offset;
+  uint32_t cell_count;
+} LiteParseLayoutRow;
 
 typedef struct {
   LiteParseRect bbox;
-  LiteParseByteView stroke_color;
-  LiteParseByteView fill_color;
-  bool stroke;
-  bool fill;
-  bool has_curve;
+  uint32_t stroke_color;
+  uint32_t fill_color;
+  /**
+   * `LITEPARSE_VECTOR_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseVectorShape;
 
 typedef struct {
@@ -985,45 +1148,162 @@ typedef struct {
   float x2;
   float y2;
   float stroke_width;
-  LiteParseByteView stroke_color;
-  LiteParseByteView fill_color;
-  bool stroke;
-  bool has_stroke_width;
-  bool fill;
+  uint32_t stroke_color;
+  uint32_t fill_color;
+  /**
+   * `LITEPARSE_VECTOR_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseVectorLine;
 
+/**
+ * One outline entry (bookmark). `page_index` is zero-based and `-1` when the
+ * destination is not a page; `y_pdf` is PDF user space.
+ */
 typedef struct {
-  size_t text_offset;
-  size_t text_length;
+  LiteParseByteView title;
+  int32_t page_index;
+  float y_pdf;
   /**
-   * Box edges in raster pixels: left, top, right, bottom.
+   * Hierarchy depth, 1-based.
    */
+  uint32_t level;
+  /**
+   * `LITEPARSE_OUTLINE_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseOutlineEntry;
+
+typedef struct {
+  LiteParseByteView message;
+  uint32_t page_number;
+} LiteParsePageError;
+
+/**
+ * Packed page content. Read from a result view, or filled by the caller for
+ * `liteparse_parser_parse_content`.
+ *
+ * Pages carry offset/count ranges into the flat arrays. `strings` holds
+ * form-field options and block source lines; `annotations` holds page and
+ * structure-node annotations; `mcids` holds struct-node and structure-tree
+ * marked-content ids; `words` and `char_codes` are shared by every text
+ * item. `document_block_offset/count` selects document-wide blocks on input
+ * only; results never report them.
+ */
+typedef struct {
+  /**
+   * Must equal `sizeof(LiteParseContent)` on input.
+   */
+  size_t size_of_content;
+  const LiteParsePage *pages;
+  size_t pages_len;
+  const LiteParseTextItem *items;
+  size_t items_len;
+  const LiteParseWordBox *words;
+  size_t words_len;
+  const uint32_t *char_codes;
+  size_t char_codes_len;
+  const LiteParseGraphic *graphics;
+  size_t graphics_len;
+  const LiteParseStructNode *struct_nodes;
+  size_t struct_nodes_len;
+  const int32_t *mcids;
+  size_t mcids_len;
+  const LiteParseImageRef *image_refs;
+  size_t image_refs_len;
+  const LiteParseImage *images;
+  size_t images_len;
+  const LiteParseAnnotation *annotations;
+  size_t annotations_len;
+  const LiteParseRect *quadpoints;
+  size_t quadpoints_len;
+  const LiteParseFormField *form_fields;
+  size_t form_fields_len;
+  const LiteParseByteView *strings;
+  size_t strings_len;
+  const LiteParseStructureNode *structure_nodes;
+  size_t structure_nodes_len;
+  const LiteParseStructureAttribute *structure_attributes;
+  size_t structure_attributes_len;
+  const LiteParseLayoutBlock *blocks;
+  size_t blocks_len;
+  const LiteParseLayoutCell *cells;
+  size_t cells_len;
+  const LiteParseLayoutRow *rows;
+  size_t rows_len;
+  const LiteParseVectorShape *vector_shapes;
+  size_t vector_shapes_len;
+  const LiteParseVectorLine *vector_lines;
+  size_t vector_lines_len;
+  const LiteParseOutlineEntry *outline;
+  size_t outline_len;
+  const LiteParsePageError *page_errors;
+  size_t page_errors_len;
+  uint32_t document_block_offset;
+  uint32_t document_block_count;
+} LiteParseContent;
+
+/**
+ * Facts recorded when a document is opened. Borrowed until the document is
+ * freed.
+ */
+typedef struct {
+  uint32_t total_pages;
+  /**
+   * `LITEPARSE_DOCUMENT_FLAG_*` bits.
+   */
+  uint32_t flags;
+  /**
+   * Bookmarks, walked once at open.
+   */
+  const LiteParseOutlineEntry *outline;
+  size_t outline_len;
+} LiteParseDocumentInfo;
+
+/**
+ * Page region in top-left-origin viewport points. Must fit within the page.
+ */
+typedef struct {
+  float x;
+  float y;
+  float width;
+  float height;
+} LiteParseRenderRegion;
+
+/**
+ * One recognized word. Box edges are raster pixels; `polygon` holds four
+ * x/y corners in reading order when `HAS_POLYGON` is set.
+ */
+typedef struct {
+  LiteParseByteView text;
   float x1;
   float y1;
   float x2;
   float y2;
   float confidence;
-  /**
-   * Four x/y corners in reading order when `has_polygon` is set.
-   */
   float polygon[8];
-  bool has_polygon;
-} LiteParseOcrWordIn;
+  /**
+   * `LITEPARSE_OCR_WORD_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseOcrWord;
 
 /**
- * One extracted page. `page_label` borrows from the handle.
- * `object_offset/count` indexes `liteparse_page_objects_objects` for
- * top-level content objects.
+ * One extracted page. `object_offset/count` index the view's `objects`
+ * for top-level content objects.
  */
 typedef struct {
-  uint32_t page_number;
-  LiteParseByteView page_label;
-  float page_width;
-  float page_height;
+  LiteParseByteView label;
   LiteParsePageGeometry geometry;
-  size_t object_offset;
-  size_t object_count;
-  bool has_geometry;
+  uint32_t page_number;
+  /**
+   * `LITEPARSE_OBJECT_PAGE_FLAG_*` bits.
+   */
+  uint32_t flags;
+  float width;
+  float height;
+  uint32_t object_offset;
+  uint32_t object_count;
 } LiteParsePageObjectPage;
 
 /**
@@ -1050,23 +1330,30 @@ typedef struct {
 } LiteParsePdfBounds;
 
 /**
- * One content object. Path segments and image filter names are offset/count
- * ranges into the handle's shared arrays. Image payload views borrow here.
+ * One content object. Ranges index the view's `objects` (direct Form
+ * XObject children), `segments`, and `filters` arrays. Image payloads are
+ * null unless requested.
  */
 typedef struct {
+  LiteParseByteView image_raw;
+  LiteParseByteView image_decoded;
+  LiteParseByteView image_bitmap;
+  LiteParseMatrix matrix;
+  LiteParsePdfBounds bounds;
   /**
    * `LITEPARSE_PAGE_OBJECT_*`.
    */
   uint32_t kind;
-  LiteParseMatrix matrix;
-  LiteParsePdfBounds bounds;
   /**
-   * Direct Form XObject children in `liteparse_page_objects_objects`.
+   * `LITEPARSE_PAGE_OBJECT_FLAG_*` bits.
    */
-  size_t child_offset;
-  size_t child_count;
-  size_t segment_offset;
-  size_t segment_count;
+  uint32_t flags;
+  uint32_t child_offset;
+  uint32_t child_count;
+  uint32_t segment_offset;
+  uint32_t segment_count;
+  uint32_t filter_offset;
+  uint32_t filter_count;
   float stroke_width;
   /**
    * Packed ARGB when the colour space is reportable as RGB.
@@ -1086,11 +1373,6 @@ typedef struct {
    * `-1` when the image is not in marked content.
    */
   int32_t image_marked_content_id;
-  size_t filter_offset;
-  size_t filter_count;
-  LiteParseByteView image_raw;
-  LiteParseByteView image_decoded;
-  LiteParseByteView image_bitmap;
   int32_t bitmap_width;
   int32_t bitmap_height;
   int32_t bitmap_stride;
@@ -1098,15 +1380,6 @@ typedef struct {
    * `LITEPARSE_BITMAP_FORMAT_*`.
    */
   uint32_t bitmap_format;
-  bool has_matrix;
-  bool has_bounds;
-  bool path_filled;
-  bool path_stroked;
-  bool has_draw_mode;
-  bool has_stroke_width;
-  bool has_fill_color;
-  bool has_stroke_color;
-  bool has_image_metadata;
 } LiteParsePageObject;
 
 /**
@@ -1114,64 +1387,90 @@ typedef struct {
  */
 typedef struct {
   /**
-   * `LITEPARSE_PATH_SEGMENT_*`. Meaningful when `has_kind` is true.
+   * `LITEPARSE_PATH_SEGMENT_*`.
    */
   uint32_t kind;
+  /**
+   * `LITEPARSE_PATH_SEGMENT_FLAG_*` bits.
+   */
+  uint32_t flags;
   float x;
   float y;
-  bool close;
-  bool has_kind;
-  bool has_point;
 } LiteParsePathSegment;
 
+typedef struct {
+  const LiteParsePageObjectPage *pages;
+  size_t pages_len;
+  const LiteParsePageObject *objects;
+  size_t objects_len;
+  const LiteParsePathSegment *segments;
+  size_t segments_len;
+  const LiteParseByteView *filters;
+  size_t filters_len;
+} LiteParsePageObjectsView;
+
 /**
- * Status and handle returned by `liteparse_parser_new`. The handle is null
- * unless the status is `LITEPARSE_STATUS_OK`.
+ * The raster handed to an OCR callback. Borrowed for the callback's
+ * duration.
  */
 typedef struct {
-  LiteParseStatus status;
-  LiteParseParser *handle;
-} LiteParseParserNew;
+  /**
+   * Tightly packed rows, 3 bytes per pixel for RGB or 1 for grayscale.
+   */
+  LiteParseByteView pixels;
+  uint32_t width;
+  uint32_t height;
+  /**
+   * `LITEPARSE_OCR_PIXEL_FORMAT_*`.
+   */
+  uint32_t pixel_format;
+  float dpi;
+  /**
+   * The configured OCR language.
+   */
+  LiteParseByteView language;
+} LiteParseOcrImage;
 
 /**
  * Return nonzero to fail recognition. Calls may be concurrent.
  */
 typedef uint32_t (*LiteParseOcrRecognizeFn)(void *user_data,
-                                            const uint8_t *pixels,
-                                            size_t pixels_len,
-                                            uint32_t width,
-                                            uint32_t height,
-                                            uint32_t pixel_format,
-                                            const char *language,
-                                            float dpi,
+                                            const LiteParseOcrImage *image,
                                             LiteParseOcrSink *sink);
 
 /**
- * One extracted page. `page_label` and `geometry` borrow from the handle.
+ * One extracted page. `item_offset/count` index the view's `items`.
  */
 typedef struct {
-  uint32_t page_number;
-  LiteParseByteView page_label;
-  float page_width;
-  float page_height;
+  LiteParseByteView label;
   LiteParsePageGeometry geometry;
-  bool has_geometry;
+  uint32_t page_number;
+  /**
+   * `LITEPARSE_RAW_PAGE_FLAG_*` bits.
+   */
+  uint32_t flags;
+  float width;
+  float height;
+  uint32_t item_offset;
+  uint32_t item_count;
 } LiteParseRawTextPage;
 
 /**
- * One heuristic-free text run. Glyph arrays borrow from the handle.
+ * One heuristic-free text run. `char_code_offset/count` index the view's
+ * `char_codes`; `glyph_name_offset/count` (Type3 fonts only, parallel to
+ * the char codes) index `glyph_names`.
  */
 typedef struct {
   LiteParseByteView text;
   LiteParseByteView font_name;
-  const uint32_t *char_codes;
-  size_t char_codes_len;
   /**
-   * Present only for Type3 fonts; parallel to `char_codes`.
+   * Advance gap across a lone generated space, in page points.
    */
-  const LiteParseByteView *glyph_names;
-  size_t glyph_names_len;
-  bool has_glyph_names;
+  double baseline_gap;
+  /**
+   * Tight viewport-space bounds of non-generated, non-space glyphs.
+   */
+  LiteParseRect grounding_bounds;
   /**
    * Counter-clockwise radians in `[0, 2π)` with page rotation folded in.
    */
@@ -1181,43 +1480,40 @@ typedef struct {
   float y;
   float width;
   float height;
-  /**
-   * Tight viewport-space bounds of non-generated, non-space glyphs.
-   */
-  LiteParseRectValue grounding_bounds;
-  /**
-   * Advance gap across a lone generated space, in page points.
-   */
-  double baseline_gap;
-  bool has_baseline_gap;
-  int32_t mcid;
-  bool has_mcid;
   float font_size;
-  int32_t font_weight;
   float font_height;
   float font_ascent;
   float font_descent;
+  int32_t font_weight;
+  int32_t mcid;
   /**
    * Packed ARGB when the colour space is reportable as RGB.
    */
   uint32_t fill_color;
   uint32_t stroke_color;
-  bool has_fill_color;
-  bool has_stroke_color;
-  bool font_is_buggy;
-  bool trailing_space_generated;
+  uint32_t char_code_offset;
+  uint32_t char_code_count;
+  uint32_t glyph_name_offset;
+  uint32_t glyph_name_count;
+  /**
+   * `LITEPARSE_RAW_ITEM_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseRawTextItem;
 
-/**
- * Page viewport size in 72-DPI points.
- */
 typedef struct {
-  float width;
-  float height;
-} LiteParsePageSize;
+  const LiteParseRawTextPage *pages;
+  size_t pages_len;
+  const LiteParseRawTextItem *items;
+  size_t items_len;
+  const uint32_t *char_codes;
+  size_t char_codes_len;
+  const LiteParseByteView *glyph_names;
+  size_t glyph_names_len;
+} LiteParseRawTextView;
 
 /**
- * Optional scalars use `has_*`; absent strings are null views.
+ * Document metadata. Absent strings are null views; scalars use flags.
  */
 typedef struct {
   /**
@@ -1230,57 +1526,41 @@ typedef struct {
   LiteParseByteView trapped;
   LiteParseByteView creation_date;
   LiteParseByteView mod_date;
+  LiteParseByteView xmp;
+  uint64_t permissions;
+  uint64_t raw_file_size;
   int32_t file_version;
   int32_t security_handler_revision;
-  uint64_t permissions;
   uint32_t eof_section_count;
   uint32_t startxref_count;
-  uint64_t raw_file_size;
-  LiteParseByteView xmp;
   uint32_t signature_count;
-  bool has_file_version;
-  bool is_encrypted;
-  bool has_is_encrypted;
-  bool has_security_handler_revision;
-  bool has_permissions;
-  bool has_eof_section_count;
-  bool has_startxref_count;
-  bool trailer_id_pair_differs;
-  bool has_trailer_id_pair_differs;
-  bool has_raw_file_size;
-  bool xmp_truncated;
-  bool has_xmp_truncated;
-  bool has_signature_count;
-  bool signature_byte_range_reaches_eof;
-  bool has_signature_byte_range_reaches_eof;
+  /**
+   * `LITEPARSE_DOC_META_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseDocumentMeta;
 
-typedef struct {
-  LiteParseDocumentMeta meta;
-  bool present;
-} LiteParseDocumentMetaValue;
-
-typedef struct {
-  LiteParsePageComplexity stats;
-  bool present;
-} LiteParsePageComplexityValue;
-
 /**
- * Screenshot borrowing PNG data from its owning handle.
+ * Rendered page PNG. `rect_offset/count` index the view's
+ * `screenshot_rects` array.
  */
 typedef struct {
+  LiteParseByteView png;
   uint32_t page_number;
   uint32_t width;
   uint32_t height;
-  LiteParseByteView png;
   /**
    * Resolution the page was actually rendered at: the requested DPI unless
    * the renderer lowered it to keep the long edge under 30,000 pixels. For
-   * a region render it still describes the page, so viewport geometry
-   * scales by it either way.
+   * a region render it still describes the page.
    */
   float effective_dpi;
-  bool is_solid_fill;
+  uint32_t rect_offset;
+  uint32_t rect_count;
+  /**
+   * `LITEPARSE_SCREENSHOT_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseScreenshot;
 
 /**
@@ -1292,163 +1572,152 @@ typedef struct {
   float y;
   float width;
   float height;
-  LiteParseByteView color;
-  bool is_line;
+  /**
+   * Packed ARGB.
+   */
+  uint32_t color;
+  /**
+   * `LITEPARSE_SCREENSHOT_RECT_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseScreenshotRect;
 
 /**
- * XFA packet borrowing data from its result handle.
+ * XFA packet; `content` is lossily decoded UTF-8.
  */
 typedef struct {
-  uint32_t index;
   LiteParseByteView name;
+  LiteParseByteView content;
+  uint32_t index;
   uint32_t content_length;
   /**
-   * Packet content, lossily decoded UTF-8; null view when unreadable.
+   * `LITEPARSE_XFA_FLAG_*` bits.
    */
-  LiteParseByteView content;
+  uint32_t flags;
 } LiteParseXfaPacket;
 
-typedef struct {
-  uint32_t version;
-  uint32_t layout_bytes_size;
-  uint32_t layout_bytes_align;
-  uint32_t projected_page_size;
-  uint32_t projected_page_align;
-  uint32_t projected_line_size;
-  uint32_t projected_line_align;
-  uint32_t projected_span_size;
-  uint32_t projected_span_align;
-  uint32_t projected_word_size;
-  uint32_t projected_word_align;
-  uint32_t projected_region_size;
-  uint32_t projected_region_align;
-  uint32_t line_span_offset;
-  uint32_t line_region_path_offset;
-  uint32_t span_char_code_offset;
-  uint32_t span_word_offset;
-  uint32_t page_region_offset;
-  uint32_t region_child_offset;
-  uint32_t layout_bytes_len_offset;
-} LiteParseProjectedLayoutAbi;
-
-typedef struct {
-  uint32_t version;
-  uint32_t coordinate_space;
-  uint32_t flags;
-  uint32_t reserved;
-  uint64_t page_count;
-  uint64_t line_count;
-  uint64_t span_count;
-  uint64_t word_count;
-  uint64_t char_code_count;
-  uint64_t region_path_count;
-  uint64_t region_count;
-  uint64_t region_item_count;
-  uint64_t region_child_count;
-} LiteParseProjectedLayoutSnapshot;
-
-typedef struct {
-  uint32_t page_number;
-  uint32_t coordinate_space;
-  uint32_t flags;
-  float width;
-  float height;
-  uint64_t line_offset;
-  uint64_t line_count;
-  uint64_t span_offset;
-  uint64_t span_count;
-  uint64_t word_offset;
-  uint64_t word_count;
-  uint64_t char_code_offset;
-  uint64_t char_code_count;
-  uint64_t region_path_offset;
-  uint64_t region_path_count;
-  uint64_t region_offset;
-  uint64_t region_count;
-  uint64_t region_item_offset;
-  uint64_t region_item_count;
-  uint64_t region_child_offset;
-  uint64_t region_child_count;
-} LiteParseProjectedLayoutPage;
-
 /**
- * Fixed-width borrowed bytes used by the projected-layout snapshot.
+ * Projected and original geometry of one text item on pages where rotation
+ * handling displaced content.
  */
 typedef struct {
-  const uint8_t *ptr;
-  uint64_t len;
-} LiteParseLayoutBytes;
+  LiteParseRect projected;
+  LiteParseRect original;
+} LiteParseItemFrame;
 
+/**
+ * One projected text line. `span_offset/count` index the view's
+ * `projected_spans` array; `region_path_offset/count` index `region_paths`
+ * (child ordinals from the page's region root).
+ */
 typedef struct {
-  LiteParseLayoutBytes text;
-  LiteParseLayoutBytes dominant_font_name;
+  LiteParseByteView text;
+  LiteParseByteView dominant_font_name;
   LiteParseRect bbox;
   float indent_x;
   float dominant_font_size;
   float heading_font_size;
   int32_t mcid;
+  /**
+   * `LITEPARSE_ANCHOR_*`.
+   */
   uint32_t anchor;
+  /**
+   * `LITEPARSE_LINE_FLAG_*` bits.
+   */
   uint32_t flags;
-  uint64_t span_offset;
-  uint64_t span_count;
-  uint64_t region_path_offset;
-  uint64_t region_path_count;
+  uint32_t span_offset;
+  uint32_t span_count;
+  uint32_t region_path_offset;
+  uint32_t region_path_count;
 } LiteParseProjectedLine;
 
-typedef struct {
-  LiteParseLayoutBytes text;
-  LiteParseLayoutBytes font_name;
-  LiteParseLayoutBytes link;
-  LiteParseLayoutBytes fill_color;
-  LiteParseLayoutBytes stroke_color;
-  float x;
-  float y;
-  float width;
-  float height;
-  float rotation;
-  float font_size;
-  float confidence;
-  int32_t font_flags;
-  float font_height;
-  float font_ascent;
-  float font_descent;
-  int32_t font_weight;
-  float text_width;
-  int32_t mcid;
-  uint64_t char_code_offset;
-  uint64_t char_code_count;
-  uint64_t word_offset;
-  uint64_t word_count;
-  uint32_t flags;
-} LiteParseProjectedSpan;
-
-typedef struct {
-  LiteParseLayoutBytes text;
-  float x;
-  float y;
-  float width;
-  float height;
-} LiteParseProjectedWord;
-
+/**
+ * One XY-cut region, flattened in pre-order. `parent_index` and the entries
+ * of `region_children` are absolute indices into `regions`. Leaves
+ * correspond to the `region_paths` on projected lines; the core keeps no
+ * leaf-to-item mapping that the result can expose.
+ */
 typedef struct {
   LiteParseRect bbox;
-  uint64_t parent_index;
-  uint64_t child_offset;
-  uint64_t child_count;
-  uint64_t item_offset;
-  uint64_t item_count;
+  uint32_t parent_index;
+  uint32_t child_offset;
+  uint32_t child_count;
+  /**
+   * `LITEPARSE_REGION_FLAG_*` bits.
+   */
   uint32_t flags;
-  uint32_t reserved;
 } LiteParseProjectedRegion;
 
 /**
- * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
+ * Everything a result exposes. `content` is the page-content model shared
+ * with `liteparse_parser_parse_content`; the remaining arrays are result
+ * only. Projected spans share `content.words` and `content.char_codes`.
  */
 typedef struct {
-  LiteParseStatus status;
-  LiteParseSearchMatches *handle;
-} LiteParseSearchMatchesNew;
+  LiteParseContent content;
+  /**
+   * Full-document plain text or Markdown, per the output format.
+   */
+  LiteParseByteView text;
+  LiteParseByteView creator;
+  LiteParseByteView producer;
+  LiteParseDocumentMeta doc_meta;
+  uint32_t total_pages;
+  uint32_t image_error_count;
+  /**
+   * `LITEPARSE_FORM_TYPE_*`, meaningful with `HAS_FORM_TYPE`.
+   */
+  int32_t form_type;
+  /**
+   * `LITEPARSE_RESULT_FLAG_*` bits.
+   */
+  uint32_t flags;
+  const LiteParseScreenshot *screenshots;
+  size_t screenshots_len;
+  const LiteParseScreenshotRect *screenshot_rects;
+  size_t screenshot_rects_len;
+  const LiteParseXfaPacket *xfa_packets;
+  size_t xfa_packets_len;
+  const LiteParseRect *figures;
+  size_t figures_len;
+  const LiteParseItemFrame *item_frames;
+  size_t item_frames_len;
+  const LiteParseProjectedLine *projected_lines;
+  size_t projected_lines_len;
+  const LiteParseTextItem *projected_spans;
+  size_t projected_spans_len;
+  const uint16_t *region_paths;
+  size_t region_paths_len;
+  const LiteParseProjectedRegion *regions;
+  size_t regions_len;
+  const uint32_t *region_children;
+  size_t region_children_len;
+  const uint32_t *flattened_page_numbers;
+  size_t flattened_page_numbers_len;
+} LiteParseResultView;
+
+/**
+ * Text items copied out of a result by `liteparse_result_search`.
+ */
+typedef struct {
+  const LiteParseTextItem *items;
+  size_t items_len;
+  const LiteParseWordBox *words;
+  size_t words_len;
+  const uint32_t *char_codes;
+  size_t char_codes_len;
+} LiteParseSearchView;
+
+/**
+ * Rendered pages and the solid rectangles detected on them.
+ */
+typedef struct {
+  const LiteParseScreenshot *screenshots;
+  size_t screenshots_len;
+  const LiteParseScreenshotRect *rects;
+  size_t rects_len;
+} LiteParseScreenshotsView;
 
 /**
  * The operation succeeded.
@@ -1456,7 +1725,7 @@ typedef struct {
 #define LITEPARSE_STATUS_OK 0
 
 /**
- * A pointer, length, or input string was invalid.
+ * A pointer, length, range, or input string was invalid.
  */
 #define LITEPARSE_STATUS_INVALID_ARGUMENT 1
 
@@ -1503,7 +1772,7 @@ typedef struct {
 
 /**
  * A Rust panic was caught before it crossed the C ABI boundary. Free any
- * returned handle and do not reuse it.
+ * handle involved and do not reuse it.
  */
 #define LITEPARSE_STATUS_PANIC 255
 
@@ -1517,65 +1786,74 @@ extern "C" {
 void liteparse_complexity_free(LiteParseComplexity *complexity);
 
 /**
- * Borrow the analyzed pages.
+ * Borrow the analyzed pages; null for a null handle.
  *
- * # Safety
- *
- * `complexity` must be live and `out_len` writable.
+ * `complexity` must be null or live.
  */
-const LiteParsePageComplexity *liteparse_complexity_slice(const LiteParseComplexity *complexity,
-                                                          size_t *out_len);
+const LiteParseComplexityView *liteparse_complexity_view(const LiteParseComplexity *complexity);
 
 /**
- * Borrow the cached JSON report, or an empty view on failure.
+ * Borrow the cached JSON report.
  *
- * # Safety
- *
- * `complexity` must be live.
+ * `complexity` must be live and `out` writable.
  */
-LiteParseByteView liteparse_complexity_json(const LiteParseComplexity *complexity);
-
-LiteParseConfig liteparse_config_default(void);
-
-LiteParseContent liteparse_content_default(void);
+LiteParseStatus liteparse_complexity_to_json(const LiteParseComplexity *complexity,
+                                             LiteParseByteView *out);
 
 /**
- * Parse caller-supplied pages. Copies every view during the call.
+ * Fill `config` with defaults. Null is a no-op.
  *
- * Empty block ranges run grid projection (and the configured classifier).
- * Any per-page or document-level block range treats those blocks as
- * authoritative Markdown. `max_pages` truncates the supplied page list on
- * both paths and drops document-level blocks when it does. `crop_box` and
- * `skip_diagonal_text` are applied before projection, matching parse.
- *
- * # Safety
- *
- * `parser` must be live. `content` and every non-null array/view it names
- * must be readable for the call.
+ * `config` must be null or writable.
  */
-LiteParseResultNew liteparse_parser_parse_content(const LiteParseParser *parser,
-                                                  const LiteParseContent *content);
+void liteparse_config_init(LiteParseConfig *config);
+
+/**
+ * Fill `content` with an empty, correctly sized value. Null is a no-op.
+ *
+ * `content` must be null or writable.
+ */
+void liteparse_content_init(LiteParseContent *content);
+
+/**
+ * Parse caller-supplied pages without opening a document. Every view and
+ * array is copied during the call.
+ *
+ * With no block ranges the pages run grid projection (and the configured
+ * classifier). Any per-page or document-level block range makes those
+ * blocks the Markdown structure; `images` and per-page complexity are
+ * forwarded on that path. `max_pages` truncates the page list and drops
+ * document-level blocks when it does. `crop_box` and `skip_diagonal_text`
+ * apply before projection, matching `liteparse_document_parse`. Output-only
+ * fields (`page_errors`, page `text`/`markdown`, geometry, and the
+ * result-only ranges) are ignored on input.
+ *
+ * `parser` must be live; `content` and every non-null array or view it
+ * names must be readable for the call; `out` must be writable.
+ */
+LiteParseStatus liteparse_parser_parse_content(const LiteParseParser *parser,
+                                               const LiteParseContent *content,
+                                               LiteParseResult **out);
 
 /**
  * Open a path, converting non-PDF input once for the document's lifetime.
  *
- * # Safety
- *
- * `parser` must be live and `path` readable UTF-8.
+ * `parser` must be live, `path` readable UTF-8, and `out` writable.
  */
-LiteParseDocumentNew liteparse_document_open_path(const LiteParseParser *parser,
-                                                  LiteParseByteView path);
+LiteParseStatus liteparse_document_open_path(const LiteParseParser *parser,
+                                             LiteParseByteView path,
+                                             LiteParseDocument **out);
 
 /**
- * Open and copy in-memory input. Prefer paths for large documents.
+ * Open and copy in-memory input. Prefer paths for large documents: bytes
+ * are copied at open and again per parse.
  *
- * # Safety
- *
- * `parser` must be live; `data` must be readable, or null with zero length.
+ * `parser` must be live; `data` must be readable, or null with zero
+ * length; `out` must be writable.
  */
-LiteParseDocumentNew liteparse_document_open_bytes(const LiteParseParser *parser,
-                                                   const uint8_t *data,
-                                                   size_t data_len);
+LiteParseStatus liteparse_document_open_bytes(const LiteParseParser *parser,
+                                              const uint8_t *data,
+                                              size_t data_len,
+                                              LiteParseDocument **out);
 
 /**
  * Destroy a document handle. Null is allowed.
@@ -1583,453 +1861,101 @@ LiteParseDocumentNew liteparse_document_open_bytes(const LiteParseParser *parser
 void liteparse_document_free(LiteParseDocument *document);
 
 /**
- * Return the source page count recorded at open.
+ * Borrow the facts recorded at open; null for a null handle.
  *
- * # Safety
- *
- * `document` must be live.
+ * `document` must be null or live.
  */
-uint32_t liteparse_document_total_pages(const LiteParseDocument *document);
+const LiteParseDocumentInfo *liteparse_document_info(const LiteParseDocument *document);
 
 /**
- * Return whether the source was converted to PDF.
+ * Parse 1-based pages; null with zero length selects all. Selections are
+ * validated against the page count, de-duplicated, and processed in
+ * ascending order. `max_pages` caps either form.
  *
- * # Safety
- *
- * `document` must be live.
+ * `document` must be live, `pages` readable or null with zero length, and
+ * `out` writable.
  */
-bool liteparse_document_is_converted(const LiteParseDocument *document);
+LiteParseStatus liteparse_document_parse(const LiteParseDocument *document,
+                                         const uint32_t *pages,
+                                         size_t pages_len,
+                                         LiteParseResult **out);
 
 /**
- * Borrow the document outline.
+ * Extract pre-projection pages: heuristic text items, graphics, and the
+ * configured extras, with no projection, OCR, text, or Markdown. Link
+ * stamping and word boxes follow the same rules as parse (links only under
+ * Markdown; word boxes when requested or under Markdown). Feed the view's
+ * `content` to `liteparse_parser_parse_content` to project and classify.
  *
- * # Safety
- *
- * `document` must be live and `out_len` writable.
+ * See `liteparse_document_parse`.
  */
-const LiteParseOutlineEntry *liteparse_document_outline(const LiteParseDocument *document,
-                                                        size_t *out_len);
+LiteParseStatus liteparse_document_extract(const LiteParseDocument *document,
+                                           const uint32_t *pages,
+                                           size_t pages_len,
+                                           LiteParseResult **out);
 
 /**
- * Parse sorted, unique, 1-based pages. Null with zero length selects all.
+ * Render selected pages to PNG. Zero DPI uses the configured value. A
+ * non-null `region` crops each page; detected rectangles are then clipped
+ * and made region-relative. The whole page is rasterized before cropping.
  *
- * # Safety
- *
- * `document` must be live and `pages` readable, or null with zero length.
+ * `document` must be live; non-null inputs must be readable; `out` writable.
  */
-LiteParseResultNew liteparse_document_parse(const LiteParseDocument *document,
+LiteParseStatus liteparse_document_screenshot(const LiteParseDocument *document,
+                                              const uint32_t *pages,
+                                              size_t pages_len,
+                                              float dpi_override,
+                                              const LiteParseRenderRegion *region,
+                                              LiteParseScreenshots **out);
+
+/**
+ * Compute pre-OCR complexity signals for selected pages.
+ *
+ * See `liteparse_document_parse`.
+ */
+LiteParseStatus liteparse_document_complexity(const LiteParseDocument *document,
+                                              const uint32_t *pages,
+                                              size_t pages_len,
+                                              LiteParseComplexity **out);
+
+/**
+ * Extract heuristic-free PDFium text runs: no gap merge, projection, OCR,
+ * or Markdown; every glyph lands in exactly one item.
+ *
+ * See `liteparse_document_parse`.
+ */
+LiteParseStatus liteparse_document_raw_text(const LiteParseDocument *document,
                                             const uint32_t *pages,
-                                            size_t pages_len);
+                                            size_t pages_len,
+                                            LiteParseRawText **out);
 
 /**
- * Render selected pages to PNG. Zero DPI uses the configured value; region
- * rectangles are clipped and made region-relative.
+ * Snapshot unfiltered page content objects: kinds, matrices, PDFium y-up
+ * bounds, form children, path segments, and image metadata. No size
+ * filters, viewport transforms, or form-matrix composition. `flags` is a
+ * mask of `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_*`; unknown bits are
+ * `LITEPARSE_STATUS_INVALID_ARGUMENT`.
  *
- * # Safety
- *
- * `document` must be live; non-null inputs must be readable.
+ * See `liteparse_document_parse`.
  */
-LiteParseScreenshotsNew liteparse_document_screenshot(const LiteParseDocument *document,
-                                                      const uint32_t *pages,
-                                                      size_t pages_len,
-                                                      float dpi_override,
-                                                      const LiteParseRenderRegion *region);
-
-/**
- * Compute complexity for selected pages; null with zero length selects all.
- *
- * # Safety
- *
- * `document` must be live and `pages` readable, or null with zero length.
- */
-LiteParseComplexityNew liteparse_document_complexity(const LiteParseDocument *document,
-                                                     const uint32_t *pages,
-                                                     size_t pages_len);
-
-/**
- * Extract heuristic-free text runs for selected pages. Null with zero
- * length selects all. `max_pages` caps either. No projection, OCR, or
- * Markdown — every pdfium glyph lands in exactly one item.
- *
- * # Safety
- *
- * `document` must be live and `pages` readable, or null with zero length.
- */
-LiteParseRawTextNew liteparse_document_raw_text(const LiteParseDocument *document,
+LiteParseStatus liteparse_document_page_objects(const LiteParseDocument *document,
                                                 const uint32_t *pages,
-                                                size_t pages_len);
+                                                size_t pages_len,
+                                                uint32_t flags,
+                                                LiteParsePageObjects **out);
 
 /**
- * Extract pre-projection pages for selected pages. Null with zero length
- * selects all. `max_pages` caps either. No grid projection, OCR, or
- * Markdown. Link stamping and word boxes follow the same rules as parse
- * (links only when Markdown is requested; word boxes when requested or
- * Markdown). Feed `liteparse_extract_as_content` into
- * `liteparse_parser_parse_content` to project and classify. That path
- * applies crop_box and skip_diagonal_text.
+ * Append recognized words atomically; invalid input appends nothing.
  *
- * # Safety
- *
- * `document` must be live and `pages` readable, or null with zero length.
- */
-LiteParseExtractNew liteparse_document_extract(const LiteParseDocument *document,
-                                               const uint32_t *pages,
-                                               size_t pages_len);
-
-/**
- * Snapshot unfiltered page content objects. Null with zero length selects
- * all. `max_pages` caps either. Geometry is left in the space pdfium
- * reports (object matrix applied, ancestor form matrices not). Form
- * children are packed as contiguous ranges so the host composes matrices
- * and chooses which forms to descend. Image payloads are omitted unless
- * `flags` requests them with `LITEPARSE_PAGE_OBJECT_INCLUDE_IMAGE_*`.
- * Unknown flag bits are `LITEPARSE_STATUS_INVALID_ARGUMENT`.
- *
- * # Safety
- *
- * `document` must be live and `pages` readable, or null with zero length.
- */
-LiteParsePageObjectsNew liteparse_document_page_objects(const LiteParseDocument *document,
-                                                        const uint32_t *pages,
-                                                        size_t pages_len,
-                                                        uint32_t flags);
-
-/**
- * Destroy an extract handle. Null is allowed.
- */
-void liteparse_extract_free(LiteParseExtract *extract);
-
-/**
- * Packed pages for `liteparse_parser_parse_content`.
- *
- * Pointers borrow from `extract` and stay valid until it is freed. The
- * snapshot includes items, graphics, word boxes, struct-tree nodes, and
- * image refs. Blocks, outline, annotations, forms, and the logical
- * structure tree are empty here; use the extract accessors for those.
- * Keep the handle alive for the duration of `liteparse_parser_parse_content`.
- *
- * `extract` must be live, or null (returns an empty default content).
- */
-LiteParseContent liteparse_extract_as_content(const LiteParseExtract *extract);
-
-/**
- * Return the number of successfully extracted pages.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-size_t liteparse_extract_page_count(const LiteParseExtract *extract);
-
-/**
- * Borrow packed pages. Offset/count pairs index the shared item and graphic
- * arrays.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseContentPage *liteparse_extract_pages(const LiteParseExtract *extract,
-                                                    size_t *out_len);
-
-/**
- * Borrow the flattened pre-projection text items.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseTextItem *liteparse_extract_items(const LiteParseExtract *extract, size_t *out_len);
-
-/**
- * Borrow the flattened structure-tree nodes used for heading detection.
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseStructNode *liteparse_extract_struct_nodes(const LiteParseExtract *extract,
-                                                          size_t *out_len);
-
-/**
- * Borrow the flattened layout graphics.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseContentGraphic *liteparse_extract_graphics(const LiteParseExtract *extract,
-                                                          size_t *out_len);
-
-/**
- * Borrow one page's `/PageLabels` label, or an empty view when absent.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-LiteParseByteView liteparse_extract_page_label(const LiteParseExtract *extract, size_t page_index);
-
-/**
- * Return the resolved PDF box, user unit, and rotation for one page.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-LiteParsePageGeometryValue liteparse_extract_page_geometry(const LiteParseExtract *extract,
-                                                           size_t page_index);
-
-/**
- * Return one page's union content bounds.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-LiteParseRectValue liteparse_extract_page_content_bounds(const LiteParseExtract *extract,
-                                                         size_t page_index);
-
-/**
- * Borrow one text item's word boxes. `item_index` is per-page.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseWordBox *liteparse_extract_word_boxes(const LiteParseExtract *extract,
-                                                     size_t page_index,
-                                                     size_t item_index,
-                                                     size_t *out_len);
-
-/**
- * Borrow decoded images. Empty unless `LITEPARSE_FLAG_EXTRACT_IMAGES`.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseImage *liteparse_extract_images(const LiteParseExtract *extract, size_t *out_len);
-
-/**
- * Return the count of image extraction failures.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-uint32_t liteparse_extract_image_error_count(const LiteParseExtract *extract);
-
-/**
- * Borrow one page's image objects, including bounds when bytes were skipped.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseImageRef *liteparse_extract_image_refs(const LiteParseExtract *extract,
-                                                      size_t page_index,
-                                                      size_t *out_len);
-
-/**
- * Borrow tolerated page errors.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParsePageError *liteparse_extract_page_errors(const LiteParseExtract *extract,
-                                                        size_t *out_len);
-
-/**
- * Whether extraction flattened at least one selected page to recover
- * form-widget text. Flattening happens on a temporary PDFium document,
- * not the document handle.
- *
- * Hosts that must reproduce the flattened content stream (for example an
- * OCR raster) should flatten exactly the pages from
- * `liteparse_extract_flattened_page_numbers`. Flattening any other page
- * hides that page's non-widget annotations. C screenshot does not flatten;
- * it renders the reopened, unflattened input.
- *
- * `extract` must be live.
- */
-bool liteparse_extract_flattened_form_widgets(const LiteParseExtract *extract);
-
-/**
- * Borrow the 1-based page numbers that were flattened during extraction.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const uint32_t *liteparse_extract_flattened_page_numbers(const LiteParseExtract *extract,
-                                                         size_t *out_len);
-
-/**
- * Return the document form type when form-field extraction was enabled.
- *
- * # Safety
- *
- * `extract` must be live.
- */
-LiteParseFormTypeValue liteparse_extract_form_type(const LiteParseExtract *extract);
-
-/**
- * Borrow one page's annotations.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseAnnotation *liteparse_extract_annotations(const LiteParseExtract *extract,
-                                                         size_t page_index,
-                                                         size_t *out_len);
-
-/**
- * Borrow one annotation's quadpoint rectangles.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseRect *liteparse_extract_annotation_quadpoints(const LiteParseExtract *extract,
-                                                             size_t page_index,
-                                                             size_t annotation_index,
-                                                             size_t *out_len);
-
-/**
- * Borrow one page's AcroForm widgets.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseFormField *liteparse_extract_form_fields(const LiteParseExtract *extract,
-                                                        size_t page_index,
-                                                        size_t *out_len);
-
-/**
- * Borrow one widget's option strings.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_extract_form_field_options(const LiteParseExtract *extract,
-                                                              size_t page_index,
-                                                              size_t field_index,
-                                                              size_t *out_len);
-
-/**
- * Borrow one widget's selected option strings.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_extract_form_field_selected_options(const LiteParseExtract *extract,
-                                                                       size_t page_index,
-                                                                       size_t field_index,
-                                                                       size_t *out_len);
-
-/**
- * Borrow one page's pre-order structure-tree nodes.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseStructureNode *liteparse_extract_structure_nodes(const LiteParseExtract *extract,
-                                                                size_t page_index,
-                                                                size_t *out_len);
-
-/**
- * Borrow one page's flattened structure attributes.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseStructureAttribute *liteparse_extract_structure_attributes(const LiteParseExtract *extract,
-                                                                          size_t page_index,
-                                                                          size_t *out_len);
-
-/**
- * Borrow one page's flattened structure-node annotations.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseAnnotation *liteparse_extract_structure_annotations(const LiteParseExtract *extract,
-                                                                   size_t page_index,
-                                                                   size_t *out_len);
-
-/**
- * Borrow one page's flattened structure-node marked-content ids.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const int32_t *liteparse_extract_structure_marked_content_ids(const LiteParseExtract *extract,
-                                                              size_t page_index,
-                                                              size_t *out_len);
-
-/**
- * Borrow one page's vector path objects.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseVectorShape *liteparse_extract_vector_shapes(const LiteParseExtract *extract,
-                                                            size_t page_index,
-                                                            size_t *out_len);
-
-/**
- * Borrow one page's merged vector segments.
- *
- * # Safety
- *
- * `extract` must be live and `out_len` writable.
- */
-const LiteParseVectorLine *liteparse_extract_vector_lines(const LiteParseExtract *extract,
-                                                          size_t page_index,
-                                                          size_t *out_len);
-
-/**
- * Append one OCR word. `polygon_corners` points to eight floats when present.
- *
- * # Safety
- *
- * `sink` must belong to the current callback and `text` must be readable UTF-8.
+ * `sink` must belong to the current callback; `words` must be readable for
+ * `count` entries, or null with zero count.
  */
 LiteParseStatus liteparse_ocr_sink_add(LiteParseOcrSink *sink,
-                                       LiteParseByteView text,
-                                       float x1,
-                                       float y1,
-                                       float x2,
-                                       float y2,
-                                       float confidence,
-                                       const float *polygon_corners);
-
-/**
- * Append OCR words atomically; invalid input appends nothing.
- *
- * # Safety
- *
- * `sink` must belong to the current callback; input arrays must be readable.
- */
-LiteParseStatus liteparse_ocr_sink_add_batch(LiteParseOcrSink *sink,
-                                             const uint8_t *blob,
-                                             size_t blob_len,
-                                             const LiteParseOcrWordIn *words,
-                                             size_t count);
+                                       const LiteParseOcrWord *words,
+                                       size_t count);
 
 /**
  * Set the callback's failure message.
- *
- * # Safety
  *
  * `sink` must belong to the current callback and `message` must be readable.
  */
@@ -2041,72 +1967,23 @@ LiteParseStatus liteparse_ocr_sink_set_error(LiteParseOcrSink *sink, LiteParseBy
 void liteparse_page_objects_free(LiteParsePageObjects *page_objects);
 
 /**
- * Return the number of extracted pages.
+ * Borrow the content objects; null for a null handle.
  *
- * # Safety
- *
- * `page_objects` must be live.
+ * `page_objects` must be null or live.
  */
-size_t liteparse_page_objects_page_count(const LiteParsePageObjects *page_objects);
+const LiteParsePageObjectsView *liteparse_page_objects_view(const LiteParsePageObjects *page_objects);
 
 /**
- * Borrow the extracted pages.
+ * Create a parser, copying its configuration.
  *
- * # Safety
- *
- * `page_objects` must be live and `out_len` writable.
+ * `config` and its views must be readable for the call; `out` writable.
  */
-const LiteParsePageObjectPage *liteparse_page_objects_pages(const LiteParsePageObjects *page_objects,
-                                                            size_t *out_len);
+LiteParseStatus liteparse_parser_new(const LiteParseConfig *config, LiteParseParser **out);
 
 /**
- * Borrow the flattened content objects. Page and form ranges index this array.
- *
- * # Safety
- *
- * `page_objects` must be live and `out_len` writable.
- */
-const LiteParsePageObject *liteparse_page_objects_objects(const LiteParsePageObjects *page_objects,
-                                                          size_t *out_len);
-
-/**
- * Borrow the flattened path segments. Object `segment_offset/count` indexes here.
- *
- * # Safety
- *
- * `page_objects` must be live and `out_len` writable.
- */
-const LiteParsePathSegment *liteparse_page_objects_segments(const LiteParsePageObjects *page_objects,
-                                                            size_t *out_len);
-
-/**
- * Borrow image filter names. Object `filter_offset/count` indexes here.
- *
- * # Safety
- *
- * `page_objects` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_page_objects_image_filters(const LiteParsePageObjects *page_objects,
-                                                              size_t *out_len);
-
-/**
- * Return the static, NUL-terminated binding version.
- */
-const char *liteparse_version(void);
-
-/**
- * Create a parser and copy its configuration.
- *
- * # Safety
- *
- * `config` and its views must be readable for the call.
- */
-LiteParseParserNew liteparse_parser_new(const LiteParseConfig *config);
-
-/**
- * Register or clear an OCR callback. Open documents retain their callback.
- *
- * # Safety
+ * Register (or clear, with a null `recognize`) an in-process OCR engine.
+ * `flags` is a mask of `LITEPARSE_OCR_FLAG_*`. Documents opened before a
+ * change keep the engine they were opened with.
  *
  * The callback and `user_data` must remain valid and thread-safe while the
  * parser or any document opened from it lives. `name` must be readable.
@@ -2115,7 +1992,7 @@ LiteParseStatus liteparse_parser_set_ocr_callback(const LiteParseParser *parser,
                                                   LiteParseOcrRecognizeFn recognize,
                                                   void *user_data,
                                                   LiteParseByteView name,
-                                                  bool prefers_grayscale);
+                                                  uint32_t flags);
 
 /**
  * Destroy a parser handle. Null is a no-op.
@@ -2128,34 +2005,11 @@ void liteparse_parser_free(LiteParseParser *parser);
 void liteparse_raw_text_free(LiteParseRawText *raw_text);
 
 /**
- * Return the number of extracted pages.
+ * Borrow the extracted runs; null for a null handle.
  *
- * # Safety
- *
- * `raw_text` must be live.
+ * `raw_text` must be null or live.
  */
-size_t liteparse_raw_text_page_count(const LiteParseRawText *raw_text);
-
-/**
- * Borrow the extracted pages.
- *
- * # Safety
- *
- * `raw_text` must be live and `out_len` writable.
- */
-const LiteParseRawTextPage *liteparse_raw_text_pages(const LiteParseRawText *raw_text,
-                                                     size_t *out_len);
-
-/**
- * Borrow one page's raw text items.
- *
- * # Safety
- *
- * `raw_text` must be live and `out_len` writable.
- */
-const LiteParseRawTextItem *liteparse_raw_text_items(const LiteParseRawText *raw_text,
-                                                     size_t page_index,
-                                                     size_t *out_len);
+const LiteParseRawTextView *liteparse_raw_text_view(const LiteParseRawText *raw_text);
 
 /**
  * Destroy a result handle. Null is allowed.
@@ -2163,468 +2017,40 @@ const LiteParseRawTextItem *liteparse_raw_text_items(const LiteParseRawText *raw
 void liteparse_result_free(LiteParseResult *result);
 
 /**
- * Borrow the cached pretty JSON result.
+ * Borrow the result view; null for a null handle. Valid until
+ * `liteparse_result_free`.
  *
- * # Safety
+ * `result` must be null or live.
+ */
+const LiteParseResultView *liteparse_result_view(const LiteParseResult *result);
+
+/**
+ * Borrow the cached pretty JSON form of a parse result. Extract results
+ * have none.
  *
  * `result` must be live and `out` writable.
  */
 LiteParseStatus liteparse_result_to_json(const LiteParseResult *result, LiteParseByteView *out);
 
 /**
- * Return the source document page count.
+ * Find phrase matches on one page as merged text items. `page_index` is a
+ * 0-based index into `content.pages`, not a source page number. `flags` is
+ * a mask of `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
+ *
+ * `result` must be live, `phrase` readable UTF-8, and `out` writable.
  */
-uint32_t liteparse_result_total_pages(const LiteParseResult *result);
+LiteParseStatus liteparse_result_search(const LiteParseResult *result,
+                                        size_t page_index,
+                                        LiteParseByteView phrase,
+                                        uint32_t flags,
+                                        LiteParseSearchMatches **out);
 
 /**
- * Return the number of parsed pages.
+ * Borrow the matches; null for a null handle.
+ *
+ * `matches` must be null or live.
  */
-size_t liteparse_result_page_count(const LiteParseResult *result);
-
-/**
- * Return a page's 1-based source page number.
- */
-uint32_t liteparse_result_page_number(const LiteParseResult *result, size_t page_index);
-
-/**
- * Borrow a page's `/PageLabels` label, or an empty view when the PDF has none.
- *
- * # Safety
- *
- * `result` must be live. The view is valid until `liteparse_result_free`.
- */
-LiteParseByteView liteparse_result_page_label(const LiteParseResult *result, size_t page_index);
-
-/**
- * Borrow full-document plain text or Markdown, according to the output format.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseByteView liteparse_result_text(const LiteParseResult *result);
-
-/**
- * Borrow one page's plain UTF-8 text.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseByteView liteparse_result_page_text(const LiteParseResult *result, size_t page_index);
-
-/**
- * Borrow one page's Markdown; empty unless Markdown output was requested.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseByteView liteparse_result_page_markdown(const LiteParseResult *result, size_t page_index);
-
-/**
- * Borrow the document's optional `/Info` Creator value. Empty when absent.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseByteView liteparse_result_creator(const LiteParseResult *result);
-
-/**
- * Borrow the document's optional `/Info` Producer value. Empty when absent.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseByteView liteparse_result_producer(const LiteParseResult *result);
-
-/**
- * Return one page's viewport dimensions in 72-DPI points.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParsePageSize liteparse_result_page_size(const LiteParseResult *result, size_t page_index);
-
-/**
- * Return the resolved PDF box, user unit, and rotation for one page.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParsePageGeometryValue liteparse_result_page_geometry(const LiteParseResult *result,
-                                                          size_t page_index);
-
-/**
- * Return the count of image extraction failures.
- *
- * # Safety
- *
- * `result` must be live.
- */
-uint32_t liteparse_result_image_error_count(const LiteParseResult *result);
-
-/**
- * Return the optional document form type.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseFormTypeValue liteparse_result_form_type(const LiteParseResult *result);
-
-/**
- * Return document metadata when extraction was enabled.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseDocumentMetaValue liteparse_result_doc_meta(const LiteParseResult *result);
-
-/**
- * Return one page's union content bounds by value.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParseRectValue liteparse_result_page_content_bounds(const LiteParseResult *result,
-                                                        size_t page_index);
-
-/**
- * Return complexity when it was included during parsing.
- *
- * # Safety
- *
- * `result` must be live.
- */
-LiteParsePageComplexityValue liteparse_result_page_complexity(const LiteParseResult *result,
-                                                              size_t page_index);
-
-/**
- * Borrow one page's text items.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseTextItem *liteparse_result_text_items(const LiteParseResult *result,
-                                                     size_t page_index,
-                                                     size_t *out_len);
-
-/**
- * Borrow one text item's word boxes.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseWordBox *liteparse_result_word_boxes(const LiteParseResult *result,
-                                                    size_t page_index,
-                                                    size_t item_index,
-                                                    size_t *out_len);
-
-/**
- * Borrow one page's image objects, including bounds when bytes were skipped.
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseImageRef *liteparse_result_image_refs(const LiteParseResult *result,
-                                                     size_t page_index,
-                                                     size_t *out_len);
-
-/**
- * Borrow all extracted images.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseImage *liteparse_result_images(const LiteParseResult *result, size_t *out_len);
-
-/**
- * Borrow screenshots produced during parsing.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseScreenshot *liteparse_result_screenshots(const LiteParseResult *result,
-                                                        size_t *out_len);
-
-/**
- * Borrow one screenshot's detected rectangles.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseScreenshotRect *liteparse_result_screenshot_rects(const LiteParseResult *result,
-                                                                 size_t index,
-                                                                 size_t *out_len);
-
-/**
- * Borrow the document outline.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseOutlineEntry *liteparse_result_outline(const LiteParseResult *result,
-                                                      size_t *out_len);
-
-/**
- * Borrow all tolerated page errors.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParsePageError *liteparse_result_page_errors(const LiteParseResult *result,
-                                                       size_t *out_len);
-
-/**
- * Borrow extracted XFA packets.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseXfaPacket *liteparse_result_xfa_packets(const LiteParseResult *result,
-                                                       size_t *out_len);
-
-/**
- * Borrow one page's annotations.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseAnnotation *liteparse_result_annotations(const LiteParseResult *result,
-                                                        size_t page_index,
-                                                        size_t *out_len);
-
-/**
- * Borrow one annotation's quadpoint rectangles.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseRect *liteparse_result_annotation_quadpoints(const LiteParseResult *result,
-                                                            size_t page_index,
-                                                            size_t annotation_index,
-                                                            size_t *out_len);
-
-/**
- * Borrow one page's AcroForm widgets.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseFormField *liteparse_result_form_fields(const LiteParseResult *result,
-                                                       size_t page_index,
-                                                       size_t *out_len);
-
-/**
- * Borrow one widget's option strings.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_result_form_field_options(const LiteParseResult *result,
-                                                             size_t page_index,
-                                                             size_t field_index,
-                                                             size_t *out_len);
-
-/**
- * Borrow one widget's selected option strings.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_result_form_field_selected_options(const LiteParseResult *result,
-                                                                      size_t page_index,
-                                                                      size_t field_index,
-                                                                      size_t *out_len);
-
-/**
- * Borrow one page's pre-order structure-tree nodes.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseStructureNode *liteparse_result_structure_nodes(const LiteParseResult *result,
-                                                               size_t page_index,
-                                                               size_t *out_len);
-
-/**
- * Borrow one page's flattened structure attributes.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseStructureAttribute *liteparse_result_structure_attributes(const LiteParseResult *result,
-                                                                         size_t page_index,
-                                                                         size_t *out_len);
-
-/**
- * Borrow one page's flattened structure-node annotations.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseAnnotation *liteparse_result_structure_annotations(const LiteParseResult *result,
-                                                                  size_t page_index,
-                                                                  size_t *out_len);
-
-/**
- * Borrow one page's flattened structure-node marked-content ids.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const int32_t *liteparse_result_structure_marked_content_ids(const LiteParseResult *result,
-                                                             size_t page_index,
-                                                             size_t *out_len);
-
-/**
- * Borrow one page's classified layout blocks.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseLayoutBlock *liteparse_result_blocks(const LiteParseResult *result,
-                                                    size_t page_index,
-                                                    size_t *out_len);
-
-/**
- * Borrow one page's packed layout table cells. Block header ranges and row
- * offsets index into this slice.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseLayoutCell *liteparse_result_block_cells(const LiteParseResult *result,
-                                                        size_t page_index,
-                                                        size_t *out_len);
-
-/**
- * Borrow one page's packed layout table rows.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseLayoutRow *liteparse_result_block_rows(const LiteParseResult *result,
-                                                      size_t page_index,
-                                                      size_t *out_len);
-
-/**
- * Borrow one page's verbatim layout source lines (`code`, `grid_fallback`).
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseByteView *liteparse_result_block_lines(const LiteParseResult *result,
-                                                      size_t page_index,
-                                                      size_t *out_len);
-
-/**
- * Return the C layout facts for the projected-layout snapshot records.
- */
-LiteParseProjectedLayoutAbi liteparse_projected_layout_abi(void);
-
-/**
- * Borrow the projected-layout snapshot descriptor.
- */
-LiteParseProjectedLayoutSnapshot liteparse_result_projected_layout_snapshot(const LiteParseResult *result);
-
-const LiteParseProjectedLayoutPage *liteparse_result_projected_layout_pages(const LiteParseResult *result,
-                                                                            size_t *out_len);
-
-const LiteParseProjectedLine *liteparse_result_projected_layout_lines(const LiteParseResult *result,
-                                                                      size_t *out_len);
-
-const LiteParseProjectedSpan *liteparse_result_projected_layout_spans(const LiteParseResult *result,
-                                                                      size_t *out_len);
-
-const LiteParseProjectedWord *liteparse_result_projected_layout_words(const LiteParseResult *result,
-                                                                      size_t *out_len);
-
-const LiteParseProjectedRegion *liteparse_result_projected_layout_regions(const LiteParseResult *result,
-                                                                          size_t *out_len);
-
-const uint16_t *liteparse_result_projected_layout_region_paths(const LiteParseResult *result,
-                                                               size_t *out_len);
-
-const uint64_t *liteparse_result_projected_layout_region_items(const LiteParseResult *result,
-                                                               size_t *out_len);
-
-const uint64_t *liteparse_result_projected_layout_region_children(const LiteParseResult *result,
-                                                                  size_t *out_len);
-
-const uint32_t *liteparse_result_projected_layout_char_codes(const LiteParseResult *result,
-                                                             size_t *out_len);
-
-/**
- * Borrow one page's vector path objects.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseVectorShape *liteparse_result_vector_shapes(const LiteParseResult *result,
-                                                           size_t page_index,
-                                                           size_t *out_len);
-
-/**
- * Borrow one page's merged vector segments.
- *
- * # Safety
- *
- * `result` must be live and `out_len` writable.
- */
-const LiteParseVectorLine *liteparse_result_vector_lines(const LiteParseResult *result,
-                                                         size_t page_index,
-                                                         size_t *out_len);
-
-/**
- * Search one page. Matches outlive the result handle.
- *
- * # Safety
- *
- * `result` must be live and `phrase` readable UTF-8.
- */
-LiteParseSearchMatchesNew liteparse_result_search(const LiteParseResult *result,
-                                                  size_t page_index,
-                                                  LiteParseByteView phrase,
-                                                  bool case_sensitive);
-
-/**
- * Borrow all phrase matches.
- *
- * # Safety
- *
- * `matches` must be live and `out_len` writable.
- */
-const LiteParseTextItem *liteparse_search_matches_slice(const LiteParseSearchMatches *matches,
-                                                        size_t *out_len);
+const LiteParseSearchView *liteparse_search_matches_view(const LiteParseSearchMatches *matches);
 
 /**
  * Destroy a search-match handle. Null is allowed.
@@ -2637,31 +2063,22 @@ void liteparse_search_matches_free(LiteParseSearchMatches *matches);
 void liteparse_screenshots_free(LiteParseScreenshots *screenshots);
 
 /**
- * Borrow all rendered pages.
+ * Borrow the rendered pages; null for a null handle.
  *
- * # Safety
- *
- * `screenshots` must be live and `out_len` writable.
+ * `screenshots` must be null or live.
  */
-const LiteParseScreenshot *liteparse_screenshots_slice(const LiteParseScreenshots *screenshots,
-                                                       size_t *out_len);
-
-/**
- * Borrow one page's detected rectangles.
- *
- * # Safety
- *
- * `screenshots` must be live and `out_len` writable.
- */
-const LiteParseScreenshotRect *liteparse_screenshots_rects(const LiteParseScreenshots *screenshots,
-                                                           size_t index,
-                                                           size_t *out_len);
+const LiteParseScreenshotsView *liteparse_screenshots_view(const LiteParseScreenshots *screenshots);
 
 /**
  * Borrow this thread's most recent failure message. The view stays valid
  * until the next failed call on the same thread.
  */
 LiteParseByteView liteparse_last_error(void);
+
+/**
+ * Borrow the static binding version string.
+ */
+LiteParseByteView liteparse_version(void);
 
 #ifdef __cplusplus
 }  // extern "C"

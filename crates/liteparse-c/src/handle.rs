@@ -4,7 +4,8 @@ use crate::status::{
     FfiError, FfiResult, LITEPARSE_STATUS_OK, LiteParseStatus, guard, suppress_panics,
 };
 
-/// Borrowed, non-NUL-terminated bytes valid while the owner lives.
+/// Borrowed, non-NUL-terminated bytes valid while their owner lives. Absent
+/// and empty are both a null pointer with zero length.
 #[derive(Debug, Default, Clone, Copy)]
 #[repr(C)]
 pub struct LiteParseByteView {
@@ -12,9 +13,10 @@ pub struct LiteParseByteView {
     pub len: usize,
 }
 
+/// Empty and absent both encode as null with zero length.
 pub(crate) fn bytes_view(value: &[u8]) -> LiteParseByteView {
     LiteParseByteView {
-        ptr: value.as_ptr(),
+        ptr: array_ptr(value),
         len: value.len(),
     }
 }
@@ -25,10 +27,34 @@ pub(crate) fn optional_str_view(value: Option<&str>) -> LiteParseByteView {
     })
 }
 
+/// Maps an opaque C handle type to its Rust state and the borrowed view it
+/// exposes.
 pub(crate) trait Opaque {
     type State;
     const NAME: &'static str;
 }
+
+pub(crate) trait HasView {
+    type View;
+    fn view(&self) -> &Self::View;
+}
+
+/// Declare a handle state whose `view` field points into its own vectors.
+/// The state owns every buffer the view references, so sharing it across
+/// threads is sound.
+macro_rules! view_state {
+    ($state:ty => $view:ty, $field:ident) => {
+        unsafe impl Send for $state {}
+        unsafe impl Sync for $state {}
+        impl $crate::handle::HasView for $state {
+            type View = $view;
+            fn view(&self) -> &$view {
+                &self.$field
+            }
+        }
+    };
+}
+pub(crate) use view_state;
 
 macro_rules! opaque_handles {
     ($($handle:ty => $state:ty, $name:literal;)*) => {$(
@@ -56,15 +82,33 @@ pub(crate) unsafe fn state_mut<'a, H: Opaque>(handle: *mut H) -> FfiResult<&'a m
         .ok_or_else(null_handle::<H>)
 }
 
-pub(crate) fn build_handle<H: Opaque>(
+/// Build a state, box it, and store the handle in `out`. `out` receives null
+/// on failure and must not itself be null.
+pub(crate) unsafe fn create_handle<H: Opaque>(
+    out: *mut *mut H,
     build: impl FnOnce() -> FfiResult<H::State>,
-) -> (LiteParseStatus, *mut H) {
+) -> LiteParseStatus {
+    let Some(out) = NonNull::new(out) else {
+        return guard(|| -> FfiResult<()> {
+            Err(FfiError::invalid_argument(format!(
+                "out pointer for {} must not be null",
+                H::NAME
+            )))
+        })
+        .unwrap_err();
+    };
     match guard(build) {
-        Ok(state) => (
-            LITEPARSE_STATUS_OK,
-            Box::into_raw(Box::new(state)).cast::<H>(),
-        ),
-        Err(status) => (status, ptr::null_mut()),
+        Ok(state) => {
+            unsafe {
+                out.as_ptr()
+                    .write(Box::into_raw(Box::new(state)).cast::<H>())
+            };
+            LITEPARSE_STATUS_OK
+        }
+        Err(status) => {
+            unsafe { out.as_ptr().write(ptr::null_mut()) };
+            status
+        }
     }
 }
 
@@ -75,23 +119,18 @@ pub(crate) unsafe fn free_handle<H: Opaque>(handle: *mut H) {
     suppress_panics(|| unsafe { drop(Box::from_raw(handle.cast::<H::State>().as_ptr())) });
 }
 
-pub(crate) unsafe fn write_out<T: Default>(out: *mut T, value: Option<T>) {
-    if let Some(out) = NonNull::new(out) {
-        unsafe { out.as_ptr().write(value.unwrap_or_default()) };
-    }
+/// Borrow a handle's view; null for a null handle.
+pub(crate) unsafe fn view_of<H: Opaque>(handle: *const H) -> *const <H::State as HasView>::View
+where
+    H::State: HasView,
+{
+    unsafe { state_ref(handle) }.map_or(ptr::null(), |state| ptr::from_ref(state.view()))
 }
 
-/// Returns null and sets `out_len` to zero for missing or empty slices.
-pub(crate) unsafe fn slice_out<'a, T: 'a>(
-    out_len: *mut usize,
-    lookup: impl FnOnce() -> FfiResult<Option<&'a [T]>>,
-) -> *const T {
-    let slice = guard(lookup).ok().flatten().unwrap_or_default();
-    unsafe { write_out(out_len, Some(slice.len())) };
-    if slice.is_empty() {
-        ptr::null()
-    } else {
-        slice.as_ptr()
+/// Write a value through an optional out pointer.
+pub(crate) unsafe fn write_out<T>(out: *mut T, value: T) {
+    if let Some(out) = NonNull::new(out) {
+        unsafe { out.as_ptr().write(value) };
     }
 }
 
@@ -116,6 +155,10 @@ pub(crate) unsafe fn optional_view_str(
 pub(crate) unsafe fn required_view_str(view: LiteParseByteView, name: &str) -> FfiResult<String> {
     unsafe { optional_view_str(view, name) }?
         .ok_or_else(|| FfiError::invalid_argument(format!("{name} must not be null")))
+}
+
+pub(crate) unsafe fn view_bytes<'a>(view: LiteParseByteView, name: &str) -> FfiResult<&'a [u8]> {
+    Ok(unsafe { as_slice(view.ptr, view.len, name) }?.unwrap_or_default())
 }
 
 /// Null is valid only when `len` is zero.
@@ -146,4 +189,44 @@ pub(crate) unsafe fn copy_array<T: Copy>(
     name: &str,
 ) -> FfiResult<Option<Vec<T>>> {
     Ok(unsafe { as_slice(items, len, name) }?.map(<[T]>::to_vec))
+}
+
+/// Pointer and length of a slice as a C array pair; null when empty.
+pub(crate) fn array_ptr<T>(items: &[T]) -> *const T {
+    if items.is_empty() {
+        ptr::null()
+    } else {
+        items.as_ptr()
+    }
+}
+
+/// The `offset + count` sub-slice of `all`. Zero-count ranges are always
+/// valid; the label is formatted only on failure.
+pub(crate) fn sub<'a, T>(
+    all: &'a [T],
+    offset: u32,
+    count: u32,
+    where_: &str,
+    field: &str,
+) -> FfiResult<&'a [T]> {
+    if count == 0 {
+        return Ok(&[]);
+    }
+    let start = offset as usize;
+    start
+        .checked_add(count as usize)
+        .filter(|end| *end <= all.len())
+        .map(|end| &all[start..end])
+        .ok_or_else(|| {
+            FfiError::invalid_argument(format!(
+                "{where_}.{field} range {offset}+{count} is outside 0..{}",
+                all.len()
+            ))
+        })
+}
+
+/// Record offsets and counts are `u32`; a result that overflows them cannot
+/// be represented and is a hard error.
+pub(crate) fn packed_len(value: usize) -> u32 {
+    u32::try_from(value).expect("packed array exceeds u32::MAX entries")
 }

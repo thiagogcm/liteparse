@@ -1,57 +1,85 @@
 use liteparse::ScreenshotResult;
 
-use crate::handle::{free_handle, opaque_handles, slice_out, state_ref};
+use crate::handle::{
+    array_ptr, bytes_view, free_handle, opaque_handles, packed_len, view_of, view_state,
+};
+use crate::records::{
+    LITEPARSE_SCREENSHOT_FLAG_SOLID_FILL, LiteParseScreenshot, LiteParseScreenshotRect, flag_bits,
+};
 use crate::render::RenderedScreenshot;
-use crate::status::LiteParseStatus;
-use crate::views::{LiteParseScreenshot, LiteParseScreenshotRect, views};
 
+/// Rendered pages. Views borrow from the handle until it is freed.
 pub struct LiteParseScreenshots {
     _opaque: [u8; 0],
-}
-
-/// Status and handle returned by screenshot renders. The handle is null
-/// unless the status is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseScreenshotsNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseScreenshots,
 }
 
 opaque_handles! {
     LiteParseScreenshots => ScreenshotsState, "screenshots";
 }
 
+/// Rendered pages and the solid rectangles detected on them.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseScreenshotsView {
+    pub screenshots: *const LiteParseScreenshot,
+    pub screenshots_len: usize,
+    pub rects: *const LiteParseScreenshotRect,
+    pub rects_len: usize,
+}
+
 pub(crate) struct ScreenshotsState {
+    /// Owns the PNG bytes and colours the records borrow.
     #[allow(dead_code)]
     source: Vec<RenderedScreenshot>,
+    /// Backing storage for `view`.
+    #[allow(dead_code)]
     shots: Vec<LiteParseScreenshot>,
-    rects: Vec<Vec<LiteParseScreenshotRect>>,
+    #[allow(dead_code)]
+    rects: Vec<LiteParseScreenshotRect>,
+    view: LiteParseScreenshotsView,
 }
+
+view_state!(ScreenshotsState => LiteParseScreenshotsView, view);
 
 impl ScreenshotsState {
     pub(crate) fn new(source: Vec<RenderedScreenshot>) -> Self {
         let (shots, rects) =
-            screenshot_views(source.iter().map(|shot| (&shot.source, shot.effective_dpi)));
+            pack_screenshots(source.iter().map(|shot| (&shot.source, shot.effective_dpi)));
+        let view = LiteParseScreenshotsView {
+            screenshots: array_ptr(&shots),
+            screenshots_len: shots.len(),
+            rects: array_ptr(&rects),
+            rects_len: rects.len(),
+        };
         Self {
             source,
             shots,
             rects,
+            view,
         }
     }
 }
 
-pub(crate) fn screenshot_views<'a>(
+pub(crate) fn pack_screenshots<'a>(
     screenshots: impl IntoIterator<Item = (&'a ScreenshotResult, f32)>,
-) -> (Vec<LiteParseScreenshot>, Vec<Vec<LiteParseScreenshotRect>>) {
-    screenshots
-        .into_iter()
-        .map(|(shot, effective_dpi)| {
-            (
-                LiteParseScreenshot::borrow(shot, effective_dpi),
-                views(&shot.rects),
-            )
-        })
-        .unzip()
+) -> (Vec<LiteParseScreenshot>, Vec<LiteParseScreenshotRect>) {
+    let mut shots = Vec::new();
+    let mut rects = Vec::new();
+    for (shot, effective_dpi) in screenshots {
+        let rect_offset = rects.len();
+        rects.extend(shot.rects.iter().map(LiteParseScreenshotRect::from));
+        shots.push(LiteParseScreenshot {
+            png: bytes_view(&shot.image_bytes),
+            page_number: shot.page_num,
+            width: shot.width,
+            height: shot.height,
+            effective_dpi,
+            rect_offset: packed_len(rect_offset),
+            rect_count: packed_len(shot.rects.len()),
+            flags: flag_bits(&[(shot.is_solid_fill, LITEPARSE_SCREENSHOT_FLAG_SOLID_FILL)]),
+        });
+    }
+    (shots, rects)
 }
 
 /// Destroy a screenshots handle. Null is allowed.
@@ -60,37 +88,12 @@ pub unsafe extern "C" fn liteparse_screenshots_free(screenshots: *mut LiteParseS
     unsafe { free_handle(screenshots) };
 }
 
-/// Borrow all rendered pages.
+/// Borrow the rendered pages; null for a null handle.
 ///
-/// # Safety
-///
-/// `screenshots` must be live and `out_len` writable.
+/// `screenshots` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_screenshots_slice(
+pub unsafe extern "C" fn liteparse_screenshots_view(
     screenshots: *const LiteParseScreenshots,
-    out_len: *mut usize,
-) -> *const LiteParseScreenshot {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(screenshots)?.shots.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's detected rectangles.
-///
-/// # Safety
-///
-/// `screenshots` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_screenshots_rects(
-    screenshots: *const LiteParseScreenshots,
-    index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseScreenshotRect {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(screenshots)?.rects.get(index).map(Vec::as_slice))
-        })
-    }
+) -> *const LiteParseScreenshotsView {
+    unsafe { view_of(screenshots) }
 }

@@ -1,14 +1,107 @@
 use liteparse::extract::{apply_page_orientation_corrections, encode_png};
-use liteparse::render::{find_solid_rects_rgba, is_solid_fill_rgba};
+use liteparse::render::{MAX_RENDER_LONG_EDGE_PX, find_solid_rects_rgba, is_solid_fill_rgba};
 use liteparse::types::{PdfInput, ScreenshotRect};
 use liteparse::{LiteParseConfig as CoreConfig, ScreenshotResult};
-use liteparse_pdfium::{Document, Library};
+use liteparse_pdfium::{Document, Library, Page, RectF};
 
 use crate::document::LiteParseRenderRegion;
+use crate::records::LiteParsePageGeometry;
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
 
-/// Must match the core renderer's limit.
-const MAX_RENDER_LONG_EDGE_PX: f32 = 30_000.0;
+/// The page's crop box, or its media box when none is set: the same fallback
+/// the core extractor uses.
+pub(crate) fn visible_box(page: &Page<'_, '_>) -> RectF {
+    page.view_box().unwrap_or(RectF {
+        left: 0.0,
+        top: page.height(),
+        right: page.width(),
+        bottom: 0.0,
+    })
+}
+
+/// Viewport size and geometry of one live PDFium page.
+pub(crate) struct PageFacts {
+    pub view_box: RectF,
+    pub width: f32,
+    pub height: f32,
+    /// Geometry and whether its rotation was reportable; `None` when PDFium
+    /// reported non-finite values.
+    pub geometry: Option<(LiteParsePageGeometry, bool)>,
+}
+
+pub(crate) fn page_facts(page: &Page<'_, '_>) -> PageFacts {
+    let view_box = visible_box(page);
+    let (width, height) = page.viewport_size(&view_box);
+    let user_unit = page.user_unit();
+    let edges = [
+        view_box.left,
+        view_box.bottom,
+        view_box.right,
+        view_box.top,
+        user_unit,
+    ];
+    let geometry = (edges.iter().all(|value| value.is_finite()) && user_unit > 0.0).then(|| {
+        let rotation = u32::try_from(page.rotation())
+            .ok()
+            .filter(|turns| *turns < 4);
+        (
+            LiteParsePageGeometry {
+                box_left: view_box.left,
+                box_bottom: view_box.bottom,
+                box_right: view_box.right,
+                box_top: view_box.top,
+                user_unit,
+                rotation_quarter_turns: rotation.unwrap_or(0),
+            },
+            rotation.is_some(),
+        )
+    });
+    PageFacts {
+        view_box,
+        width,
+        height,
+        geometry,
+    }
+}
+
+/// Run `f` on each selected page (all pages when `pages` is `None`, capped
+/// by `max_pages`). Under `continue_on_page_error`, a page whose work fails
+/// with a parse error is skipped; other errors propagate.
+pub(crate) fn map_pages<T>(
+    document: &Document<'_>,
+    pages: Option<Vec<u32>>,
+    max_pages: usize,
+    config: &CoreConfig,
+    tag: &str,
+    mut f: impl FnMut(u32, &Page<'_, '_>) -> FfiResult<T>,
+) -> FfiResult<Vec<T>> {
+    let page_count = document.page_count().max(0) as u32;
+    let mut pages = pages.unwrap_or_else(|| (1..=page_count).collect());
+    pages.truncate(max_pages);
+    let mut out = Vec::with_capacity(pages.len());
+    for page_num in pages {
+        let result = document
+            .page(page_num as i32 - 1)
+            .map_err(FfiError::from)
+            .and_then(|page| f(page_num, &page));
+        match result {
+            Ok(value) => out.push(value),
+            Err(error)
+                if config.continue_on_page_error
+                    && error.status == LITEPARSE_STATUS_PARSE_ERROR =>
+            {
+                if !config.quiet {
+                    eprintln!(
+                        "[{tag}] page {page_num} failed: {} — skipping (continue_on_page_error)",
+                        error.message
+                    );
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(out)
+}
 
 pub(crate) struct RenderedScreenshot {
     pub(crate) source: ScreenshotResult,
@@ -29,7 +122,6 @@ pub(crate) struct RenderRequest<'a> {
     pub(crate) password: Option<&'a str>,
     pub(crate) detect_rects: bool,
     pub(crate) render_form_fields: bool,
-    pub(crate) continue_on_page_error: bool,
     pub(crate) region: Option<LiteParseRenderRegion>,
 }
 
@@ -66,7 +158,6 @@ impl<'a> RenderRequest<'a> {
             password: config.password.as_deref(),
             detect_rects: config.detect_screenshot_rects,
             render_form_fields: config.render_form_fields,
-            continue_on_page_error: config.continue_on_page_error,
             region,
         })
     }
@@ -87,17 +178,11 @@ pub(crate) fn render_pages(
     input: &PdfInput,
     pages: Option<&[u32]>,
     request: &RenderRequest<'_>,
-    orientation_corrections: &[liteparse::config::PageOrientationCorrection],
+    config: &CoreConfig,
 ) -> FfiResult<Vec<RenderedScreenshot>> {
     let lib = Library::init();
     let document = load_document(&lib, input, request.password)?;
-    apply_page_orientation_corrections(&document, orientation_corrections)?;
-    let page_count = document.page_count().max(0) as u32;
-    let pages: Vec<u32> = match pages {
-        Some(pages) => pages.to_vec(),
-        None => (1..=page_count).collect(),
-    };
-
+    apply_page_orientation_corrections(&document, &config.page_orientation_corrections)?;
     let form = request
         .render_form_fields
         .then(|| document.form_environment())
@@ -105,34 +190,14 @@ pub(crate) fn render_pages(
     if let Some(form) = form.as_ref() {
         form.run_document_actions();
     }
-
-    let mut results = Vec::with_capacity(pages.len());
-    for page_num in pages {
-        let rendered = (|| -> FfiResult<RenderedScreenshot> {
-            if page_num < 1 || page_num > page_count {
-                return Err(FfiError::invalid_argument(format!(
-                    "page {page_num} out of range (document has {page_count} pages)"
-                )));
-            }
-            let page = document.page((page_num - 1) as i32)?;
-            render_page(&page, form.as_ref(), page_num, request)
-        })();
-
-        match rendered {
-            Ok(rendered) => results.push(rendered),
-            Err(error)
-                if request.continue_on_page_error
-                    && error.status == LITEPARSE_STATUS_PARSE_ERROR =>
-            {
-                eprintln!(
-                    "[render] page {page_num} failed: {} — skipping its screenshot (continue_on_page_error)",
-                    error.message
-                )
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(results)
+    map_pages(
+        &document,
+        pages.map(<[u32]>::to_vec),
+        usize::MAX,
+        config,
+        "render",
+        |page_num, page| render_page(page, form.as_ref(), page_num, request),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -179,7 +244,7 @@ impl Raster {
         for row in window.y..window.y + window.height {
             let start = row as usize * stride + window.x as usize * 4;
             let row = &source[start..start + window.width as usize * 4];
-            for pixel in row.chunks_exact(4) {
+            for pixel in row.as_chunks::<4>().0 {
                 rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
             }
         }

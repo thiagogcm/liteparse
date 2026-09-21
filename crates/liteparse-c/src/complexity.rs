@@ -3,38 +3,50 @@ use std::sync::OnceLock;
 use liteparse::ocr_merge::PageComplexityStats;
 
 use crate::handle::{
-    LiteParseByteView, bytes_view, free_handle, opaque_handles, slice_out, state_ref,
+    LiteParseByteView, array_ptr, bytes_view, free_handle, opaque_handles, state_ref, view_of,
+    view_state, write_out,
 };
-use crate::status::{FfiError, LiteParseStatus, guard};
-use crate::views::{LiteParsePageComplexity, views};
+use crate::records::{LiteParsePageComplexity, views};
+use crate::status::{FfiError, LiteParseStatus, boundary};
 
+/// Per-page complexity signals. Views borrow from the handle.
 pub struct LiteParseComplexity {
     _opaque: [u8; 0],
-}
-
-/// Status and handle returned by complexity analysis. The handle is null
-/// unless the status is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseComplexityNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseComplexity,
 }
 
 opaque_handles! {
     LiteParseComplexity => ComplexityState, "complexity";
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseComplexityView {
+    pub pages: *const LiteParsePageComplexity,
+    pub pages_len: usize,
+}
+
 pub(crate) struct ComplexityState {
     stats: Vec<PageComplexityStats>,
+    /// Backing storage for `view`.
+    #[allow(dead_code)]
     pages: Vec<LiteParsePageComplexity>,
+    view: LiteParseComplexityView,
     json: OnceLock<Result<String, String>>,
 }
 
+view_state!(ComplexityState => LiteParseComplexityView, view);
+
 impl ComplexityState {
     pub(crate) fn new(stats: Vec<PageComplexityStats>) -> Self {
+        let pages: Vec<LiteParsePageComplexity> = views(&stats);
+        let view = LiteParseComplexityView {
+            pages: array_ptr(&pages),
+            pages_len: pages.len(),
+        };
         Self {
-            pages: views(&stats),
             stats,
+            pages,
+            view,
             json: OnceLock::new(),
         }
     }
@@ -46,42 +58,35 @@ pub unsafe extern "C" fn liteparse_complexity_free(complexity: *mut LiteParseCom
     unsafe { free_handle(complexity) };
 }
 
-/// Borrow the analyzed pages.
+/// Borrow the analyzed pages; null for a null handle.
 ///
-/// # Safety
-///
-/// `complexity` must be live and `out_len` writable.
+/// `complexity` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_complexity_slice(
+pub unsafe extern "C" fn liteparse_complexity_view(
     complexity: *const LiteParseComplexity,
-    out_len: *mut usize,
-) -> *const LiteParsePageComplexity {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(complexity)?.pages.as_slice()))
-        })
-    }
+) -> *const LiteParseComplexityView {
+    unsafe { view_of(complexity) }
 }
 
-/// Borrow the cached JSON report, or an empty view on failure.
+/// Borrow the cached JSON report.
 ///
-/// # Safety
-///
-/// `complexity` must be live.
+/// `complexity` must be live and `out` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_complexity_json(
+pub unsafe extern "C" fn liteparse_complexity_to_json(
     complexity: *const LiteParseComplexity,
-) -> LiteParseByteView {
-    guard(|| {
+    out: *mut LiteParseByteView,
+) -> LiteParseStatus {
+    unsafe { write_out(out, LiteParseByteView::default()) };
+    boundary(|| {
         let state = unsafe { state_ref(complexity) }?;
-        state
+        let json = state
             .json
             .get_or_init(|| {
                 serde_json::to_string_pretty(&state.stats).map_err(|error| error.to_string())
             })
             .as_deref()
-            .map(|json| bytes_view(json.as_bytes()))
-            .map_err(FfiError::serialization)
+            .map_err(FfiError::serialization)?;
+        unsafe { write_out(out, bytes_view(json.as_bytes())) };
+        Ok(())
     })
-    .unwrap_or_default()
 }

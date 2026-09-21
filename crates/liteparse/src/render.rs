@@ -9,7 +9,8 @@ use serde::Serialize;
 /// pages — dense PDFs and especially `/UserUnit` spreadsheet exports — can't
 /// request multi-gigabyte bitmaps. 30,000 px keeps the historical behavior
 /// for every page under ~14,400 pt at 150 DPI.
-const MAX_RENDER_LONG_EDGE_PX: f32 = 30_000.0;
+#[doc(hidden)]
+pub const MAX_RENDER_LONG_EDGE_PX: f32 = 30_000.0;
 
 /// A single rendered page as PNG bytes, plus raster-derived signals.
 #[derive(Debug, Clone)]

@@ -16,10 +16,14 @@ pub const LITEPARSE_IMAGE_MODE_OFF: u32 = 0;
 pub const LITEPARSE_IMAGE_MODE_PLACEHOLDER: u32 = 1;
 pub const LITEPARSE_IMAGE_MODE_EMBED: u32 = 2;
 
-/// Keep the native default in fields where zero is not meaningful.
+/// Keeps the native default in `u32` config fields.
 pub const LITEPARSE_UNSET: u32 = u32::MAX;
 
-/// Bits are ABI-stable: append new flags without renumbering existing ones.
+/// `LiteParseConfig.flags` bits.
+pub const LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX: u32 = 1 << 0;
+
+/// `LiteParseConfig.bools_set` / `bools_values` bits. Bits are ABI-stable:
+/// append new flags without renumbering existing ones.
 pub const LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR: u64 = 1u64 << 0;
 pub const LITEPARSE_FLAG_DETECT_SCREENSHOT_RECTS: u64 = 1u64 << 1;
 pub const LITEPARSE_FLAG_EMIT_WORD_BOXES: u64 = 1u64 << 2;
@@ -131,81 +135,86 @@ pub struct LiteParseHeader {
 }
 
 /// One per-page orientation correction: `page` is 1-based, `angle` is the
-/// clockwise degrees (0/90/180/270) the content appears rotated. Copied by
-/// `liteparse_parser_new`; out-of-range pages are ignored like core.
+/// clockwise degrees (0/90/180/270) the content appears rotated. Out-of-range
+/// pages are ignored like core.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct LiteParsePageOrientationCorrection {
     pub page: u32,
-    pub angle: u16,
+    pub angle: u32,
 }
 
-/// Start with `liteparse_config_default`; parser creation copies all views.
+/// Start with `liteparse_config_init`; parser creation copies all views.
 #[repr(C)]
 pub struct LiteParseConfig {
     /// Must equal `sizeof(LiteParseConfig)`.
     pub size_of_config: usize,
+    /// Core booleans: a bit in `bools_set` selects the field, the same bit in
+    /// `bools_values` gives its value. Unset bits keep the native default.
     pub bools_set: u64,
     pub bools_values: u64,
-    /// Zero keeps the native default (1000).
-    pub max_pages: usize,
-    /// Zero keeps the native default.
-    pub num_workers: usize,
-    /// Zero keeps the native default; nonzero values must be finite and > 0.
-    pub dpi: f32,
+    /// `LITEPARSE_CONFIG_FLAG_*` bits.
+    pub flags: u32,
+    /// `LITEPARSE_UNSET` keeps the native default (1000); zero parses no pages.
+    pub max_pages: u32,
+    /// `LITEPARSE_UNSET` keeps the native default.
+    pub num_workers: u32,
     /// `LITEPARSE_UNSET` keeps the native default.
     pub output_format: u32,
     /// `LITEPARSE_UNSET` keeps the native default.
     pub image_mode: u32,
-    /// Normalized fractions ordered top, right, bottom, left. When
-    /// `has_crop_box` is set every value must lie in `[0, 1]` with
-    /// `top + bottom < 1` and `left + right < 1`.
+    /// Zero keeps the native default; nonzero values must be finite and > 0.
+    pub dpi: f32,
+    /// Normalized fractions ordered top, right, bottom, left, applied when
+    /// `LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX` is set. Every value must lie in
+    /// `[0, 1]` with `top + bottom < 1` and `left + right < 1`.
     pub crop_box: [f32; 4],
-    pub has_crop_box: bool,
     pub ocr_language: LiteParseByteView,
     pub ocr_server_url: LiteParseByteView,
     pub tessdata_path: LiteParseByteView,
     pub password: LiteParseByteView,
     pub image_output_dir: LiteParseByteView,
+    /// Optional `%02x%02x.msgpack` glyph-database directory. An explicit path
+    /// overrides `LITEPARSE_FONT_DB_DIR`.
+    pub font_db_dir: LiteParseByteView,
     pub ocr_server_headers: *const LiteParseHeader,
     pub ocr_server_headers_len: usize,
     pub ocr_hedge_delays_ms: *const u64,
     pub ocr_hedge_delays_ms_len: usize,
-    /// Optional `%02x%02x.msgpack` glyph-database directory. An explicit path
-    /// overrides `LITEPARSE_FONT_DB_DIR`.
-    pub font_db_dir: LiteParseByteView,
-    /// Per-page orientation corrections, copied during `liteparse_parser_new`.
-    /// Null with zero length means none.
     pub orientation_corrections: *const LiteParsePageOrientationCorrection,
     pub orientation_corrections_len: usize,
 }
 
+/// Fill `config` with defaults. Null is a no-op.
+///
+/// `config` must be null or writable.
 #[unsafe(no_mangle)]
-pub extern "C" fn liteparse_config_default() -> LiteParseConfig {
-    LiteParseConfig {
+pub unsafe extern "C" fn liteparse_config_init(config: *mut LiteParseConfig) {
+    let value = LiteParseConfig {
         size_of_config: size_of::<LiteParseConfig>(),
         bools_set: 0,
         bools_values: 0,
-        max_pages: 0,
-        num_workers: 0,
-        dpi: 0.0,
+        flags: 0,
+        max_pages: LITEPARSE_UNSET,
+        num_workers: LITEPARSE_UNSET,
         output_format: LITEPARSE_UNSET,
         image_mode: LITEPARSE_UNSET,
+        dpi: 0.0,
         crop_box: [0.0; 4],
-        has_crop_box: false,
         ocr_language: LiteParseByteView::default(),
         ocr_server_url: LiteParseByteView::default(),
         tessdata_path: LiteParseByteView::default(),
         password: LiteParseByteView::default(),
         image_output_dir: LiteParseByteView::default(),
+        font_db_dir: LiteParseByteView::default(),
         ocr_server_headers: ptr::null(),
         ocr_server_headers_len: 0,
         ocr_hedge_delays_ms: ptr::null(),
         ocr_hedge_delays_ms_len: 0,
-        font_db_dir: LiteParseByteView::default(),
         orientation_corrections: ptr::null(),
         orientation_corrections_len: 0,
-    }
+    };
+    unsafe { crate::handle::write_out(config, value) };
 }
 
 fn crop_box(fractions: [f32; 4]) -> FfiResult<CropBox> {
@@ -232,7 +241,7 @@ pub(crate) struct OwnedParserConfig {
 
 pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<OwnedParserConfig> {
     let raw = unsafe { raw.as_ref() }.ok_or_else(|| {
-        FfiError::invalid_argument("config must not be null; start from liteparse_config_default()")
+        FfiError::invalid_argument("config must not be null; start from liteparse_config_init()")
     })?;
     if raw.size_of_config != size_of::<LiteParseConfig>() {
         return Err(FfiError::invalid_argument(format!(
@@ -241,15 +250,20 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
             size_of::<LiteParseConfig>()
         )));
     }
+    if raw.flags & !LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX != 0 {
+        return Err(FfiError::invalid_config(
+            "config.flags contains unknown bits",
+        ));
+    }
 
     let mut config = CoreConfig::default();
     apply_flags(raw.bools_set, raw.bools_values, &mut config);
 
-    if raw.max_pages != 0 {
-        config.max_pages = raw.max_pages;
+    if raw.max_pages != LITEPARSE_UNSET {
+        config.max_pages = raw.max_pages as usize;
     }
-    if raw.num_workers != 0 {
-        config.num_workers = raw.num_workers;
+    if raw.num_workers != LITEPARSE_UNSET {
+        config.num_workers = raw.num_workers as usize;
     }
     if raw.dpi != 0.0 {
         if !raw.dpi.is_finite() || raw.dpi <= 0.0 {
@@ -275,7 +289,7 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
             _ => return Err(FfiError::invalid_config("unknown image mode")),
         };
     }
-    if raw.has_crop_box {
+    if raw.flags & LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX != 0 {
         config.crop_box = Some(crop_box(raw.crop_box)?);
     }
 
@@ -335,7 +349,7 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
             .page_orientation_corrections
             .push(PageOrientationCorrection {
                 page: correction.page,
-                angle: correction.angle,
+                angle: correction.angle as u16,
             });
     }
 

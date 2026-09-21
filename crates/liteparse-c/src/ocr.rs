@@ -1,16 +1,24 @@
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 use std::ptr;
 
 use liteparse::ocr::{OcrEngine, OcrOptions, OcrResult};
 
-use crate::handle::{LiteParseByteView, as_slice, opaque_handles, required_view_str, state_mut};
+use crate::handle::{
+    LiteParseByteView, as_slice, bytes_view, opaque_handles, required_view_str, state_mut,
+};
 use crate::status::{FfiError, LiteParseStatus, boundary};
 
-/// Pixel formats passed to a `LiteParseOcrRecognizeFn`.
+/// `liteparse_parser_set_ocr_callback` flags.
+pub const LITEPARSE_OCR_FLAG_PREFERS_GRAYSCALE: u32 = 1 << 0;
+
+/// `LiteParseOcrImage.pixel_format` values.
 pub const LITEPARSE_OCR_PIXEL_FORMAT_RGB: u32 = 0;
 pub const LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE: u32 = 1;
+
+/// `LiteParseOcrWord.flags` bits.
+pub const LITEPARSE_OCR_WORD_FLAG_HAS_POLYGON: u32 = 1 << 0;
 
 /// Valid only during the callback that receives it.
 pub struct LiteParseOcrSink {
@@ -21,49 +29,52 @@ opaque_handles! {
     LiteParseOcrSink => OcrSinkState, "sink";
 }
 
+/// The raster handed to an OCR callback. Borrowed for the callback's
+/// duration.
+#[repr(C)]
+pub struct LiteParseOcrImage {
+    /// Tightly packed rows, 3 bytes per pixel for RGB or 1 for grayscale.
+    pub pixels: LiteParseByteView,
+    pub width: u32,
+    pub height: u32,
+    /// `LITEPARSE_OCR_PIXEL_FORMAT_*`.
+    pub pixel_format: u32,
+    pub dpi: f32,
+    /// The configured OCR language.
+    pub language: LiteParseByteView,
+}
+
 /// Return nonzero to fail recognition. Calls may be concurrent.
-// Kept spelled out rather than `Option<OcrRecognizeRaw>`: cbindgen does not
-// see through the alias and would emit an opaque type instead of the function
-// pointer. This signature and `OcrRecognizeRaw` must stay in step.
+// Spelled out rather than `Option<OcrRecognizeRaw>`: cbindgen does not see
+// through the alias. This signature and `OcrRecognizeRaw` must stay in step.
 pub type LiteParseOcrRecognizeFn = Option<
     unsafe extern "C" fn(
         user_data: *mut c_void,
-        pixels: *const u8,
-        pixels_len: usize,
-        width: u32,
-        height: u32,
-        pixel_format: u32,
-        language: *const c_char,
-        dpi: f32,
+        image: *const LiteParseOcrImage,
         sink: *mut LiteParseOcrSink,
     ) -> u32,
 >;
 
 type OcrRecognizeRaw = unsafe extern "C" fn(
     user_data: *mut c_void,
-    pixels: *const u8,
-    pixels_len: usize,
-    width: u32,
-    height: u32,
-    pixel_format: u32,
-    language: *const c_char,
-    dpi: f32,
+    image: *const LiteParseOcrImage,
     sink: *mut LiteParseOcrSink,
 ) -> u32;
 
+/// One recognized word. Box edges are raster pixels; `polygon` holds four
+/// x/y corners in reading order when `HAS_POLYGON` is set.
 #[repr(C)]
-pub struct LiteParseOcrWordIn {
-    pub text_offset: usize,
-    pub text_length: usize,
-    /// Box edges in raster pixels: left, top, right, bottom.
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseOcrWord {
+    pub text: LiteParseByteView,
     pub x1: f32,
     pub y1: f32,
     pub x2: f32,
     pub y2: f32,
     pub confidence: f32,
-    /// Four x/y corners in reading order when `has_polygon` is set.
     pub polygon: [f32; 8],
-    pub has_polygon: bool,
+    /// `LITEPARSE_OCR_WORD_FLAG_*` bits.
+    pub flags: u32,
 }
 
 pub(crate) struct OcrSinkState {
@@ -105,12 +116,17 @@ impl CallbackOcrEngine {
         height: u32,
         options: &OcrOptions,
     ) -> Result<Vec<OcrResult>, String> {
-        let language = CString::new(options.language.as_str())
-            .map_err(|_| "ocr_language contains an interior NUL byte".to_owned())?;
-        let pixel_format = if self.prefers_grayscale {
-            LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE
-        } else {
-            LITEPARSE_OCR_PIXEL_FORMAT_RGB
+        let image = LiteParseOcrImage {
+            pixels: bytes_view(image_data),
+            width,
+            height,
+            pixel_format: if self.prefers_grayscale {
+                LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE
+            } else {
+                LITEPARSE_OCR_PIXEL_FORMAT_RGB
+            },
+            dpi: options.dpi,
+            language: bytes_view(options.language.as_bytes()),
         };
         let mut sink = OcrSinkState {
             results: Vec::new(),
@@ -119,13 +135,7 @@ impl CallbackOcrEngine {
         let status = unsafe {
             (self.recognize)(
                 self.user_data,
-                image_data.as_ptr(),
-                image_data.len(),
-                width,
-                height,
-                pixel_format,
-                language.as_ptr(),
-                options.dpi,
+                ptr::from_ref(&image),
                 ptr::from_mut(&mut sink).cast::<LiteParseOcrSink>(),
             )
         };
@@ -165,90 +175,44 @@ impl OcrEngine for CallbackOcrEngine {
     }
 }
 
-fn polygon(corners: [f32; 8]) -> [[f32; 2]; 4] {
-    let [x0, y0, x1, y1, x2, y2, x3, y3] = corners;
-    [[x0, y0], [x1, y1], [x2, y2], [x3, y3]]
-}
-
-/// Append one OCR word. `polygon_corners` points to eight floats when present.
+/// Append recognized words atomically; invalid input appends nothing.
 ///
-/// # Safety
-///
-/// `sink` must belong to the current callback and `text` must be readable UTF-8.
+/// `sink` must belong to the current callback; `words` must be readable for
+/// `count` entries, or null with zero count.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_ocr_sink_add(
     sink: *mut LiteParseOcrSink,
-    text: LiteParseByteView,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    confidence: f32,
-    polygon_corners: *const f32,
-) -> LiteParseStatus {
-    boundary(|| unsafe {
-        let state = state_mut(sink)?;
-        let text = required_view_str(text, "text")?;
-        let polygon = polygon_corners
-            .cast::<[f32; 8]>()
-            .as_ref()
-            .map(|corners| polygon(*corners));
-        state.results.push(OcrResult {
-            text,
-            bbox: [x1, y1, x2, y2],
-            confidence,
-            polygon,
-        });
-        Ok(())
-    })
-}
-
-/// Append OCR words atomically; invalid input appends nothing.
-///
-/// # Safety
-///
-/// `sink` must belong to the current callback; input arrays must be readable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_ocr_sink_add_batch(
-    sink: *mut LiteParseOcrSink,
-    blob: *const u8,
-    blob_len: usize,
-    words: *const LiteParseOcrWordIn,
+    words: *const LiteParseOcrWord,
     count: usize,
 ) -> LiteParseStatus {
     boundary(|| unsafe {
-        let text_blob = as_slice(blob, blob_len, "blob")?.unwrap_or_default();
         let incoming = as_slice(words, count, "words")?.unwrap_or_default();
-        let parsed = incoming
-            .iter()
-            .map(|word| {
-                let end = word
-                    .text_offset
-                    .checked_add(word.text_length)
-                    .filter(|end| *end <= text_blob.len())
-                    .ok_or_else(|| {
-                        FfiError::invalid_argument("word text range falls outside the blob")
-                    })?;
-                let text =
-                    std::str::from_utf8(&text_blob[word.text_offset..end]).map_err(|error| {
-                        FfiError::invalid_argument(format!("word text is not valid UTF-8: {error}"))
-                    })?;
-                Ok(OcrResult {
-                    text: text.to_owned(),
-                    bbox: [word.x1, word.y1, word.x2, word.y2],
-                    confidence: word.confidence,
-                    polygon: word.has_polygon.then(|| polygon(word.polygon)),
+        let parsed =
+            incoming
+                .iter()
+                .enumerate()
+                .map(|(index, word)| {
+                    if word.flags & !LITEPARSE_OCR_WORD_FLAG_HAS_POLYGON != 0 {
+                        return Err(FfiError::invalid_argument(format!(
+                            "words[{index}].flags contains unknown bits"
+                        )));
+                    }
+                    let [x0, y0, x1, y1, x2, y2, x3, y3] = word.polygon;
+                    Ok(OcrResult {
+                        text: required_view_str(word.text, &format!("words[{index}].text"))?,
+                        bbox: [word.x1, word.y1, word.x2, word.y2],
+                        confidence: word.confidence,
+                        polygon: (word.flags & LITEPARSE_OCR_WORD_FLAG_HAS_POLYGON != 0)
+                            .then_some([[x0, y0], [x1, y1], [x2, y2], [x3, y3]]),
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, FfiError>>()?;
+                .collect::<Result<Vec<_>, FfiError>>()?;
         state_mut(sink)?.results.extend(parsed);
         Ok(())
     })
 }
 
 /// Set the callback's failure message.
-///
-/// # Safety
 ///
 /// `sink` must belong to the current callback and `message` must be readable.
 #[unsafe(no_mangle)]

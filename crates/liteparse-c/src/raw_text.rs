@@ -1,56 +1,66 @@
 use liteparse::RawTextItem;
 use liteparse::{append_raw_widget_text_items, extract_raw_text_items};
-use liteparse_pdfium::{Library, RectF};
+use liteparse_pdfium::Library;
 
 use crate::document::DocumentState;
 use crate::handle::{
-    LiteParseByteView, bytes_view, free_handle, opaque_handles, optional_str_view, slice_out,
-    state_ref,
+    LiteParseByteView, array_ptr, bytes_view, free_handle, opaque_handles, optional_str_view,
+    packed_len, view_of, view_state,
 };
-use crate::render::load_document;
-use crate::status::{FfiResult, LITEPARSE_STATUS_PARSE_ERROR, LiteParseStatus};
-use crate::views::{LiteParsePageGeometry, LiteParseRect, LiteParseRectValue};
+use crate::records::{LiteParsePageGeometry, LiteParseRect, flag_bits, optional};
+use crate::render::{load_document, map_pages, page_facts};
+use crate::status::FfiResult;
 
-/// A document's heuristic-free text runs. Views borrow from this handle.
+/// Heuristic-free text runs. Views borrow from the handle.
 pub struct LiteParseRawText {
     _opaque: [u8; 0],
-}
-
-/// The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
-#[repr(C)]
-pub struct LiteParseRawTextNew {
-    pub status: LiteParseStatus,
-    pub handle: *mut LiteParseRawText,
 }
 
 opaque_handles! {
     LiteParseRawText => RawTextState, "raw_text";
 }
 
-/// One extracted page. `page_label` and `geometry` borrow from the handle.
+/// `LiteParseRawTextPage.flags` bits.
+pub const LITEPARSE_RAW_PAGE_FLAG_HAS_GEOMETRY: u32 = 1 << 0;
+pub const LITEPARSE_RAW_PAGE_FLAG_HAS_ROTATION: u32 = 1 << 1;
+
+/// `LiteParseRawTextItem.flags` bits.
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_GLYPH_NAMES: u32 = 1 << 0;
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_GROUNDING_BOUNDS: u32 = 1 << 1;
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_BASELINE_GAP: u32 = 1 << 2;
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_MCID: u32 = 1 << 3;
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_FILL_COLOR: u32 = 1 << 4;
+pub const LITEPARSE_RAW_ITEM_FLAG_HAS_STROKE_COLOR: u32 = 1 << 5;
+pub const LITEPARSE_RAW_ITEM_FLAG_FONT_IS_BUGGY: u32 = 1 << 6;
+pub const LITEPARSE_RAW_ITEM_FLAG_TRAILING_SPACE_GENERATED: u32 = 1 << 7;
+
+/// One extracted page. `item_offset/count` index the view's `items`.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParseRawTextPage {
-    pub page_number: u32,
-    pub page_label: LiteParseByteView,
-    pub page_width: f32,
-    pub page_height: f32,
+    pub label: LiteParseByteView,
     pub geometry: LiteParsePageGeometry,
-    pub has_geometry: bool,
+    pub page_number: u32,
+    /// `LITEPARSE_RAW_PAGE_FLAG_*` bits.
+    pub flags: u32,
+    pub width: f32,
+    pub height: f32,
+    pub item_offset: u32,
+    pub item_count: u32,
 }
 
-/// One heuristic-free text run. Glyph arrays borrow from the handle.
+/// One heuristic-free text run. `char_code_offset/count` index the view's
+/// `char_codes`; `glyph_name_offset/count` (Type3 fonts only, parallel to
+/// the char codes) index `glyph_names`.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParseRawTextItem {
     pub text: LiteParseByteView,
     pub font_name: LiteParseByteView,
-    pub char_codes: *const u32,
-    pub char_codes_len: usize,
-    /// Present only for Type3 fonts; parallel to `char_codes`.
-    pub glyph_names: *const LiteParseByteView,
-    pub glyph_names_len: usize,
-    pub has_glyph_names: bool,
+    /// Advance gap across a lone generated space, in page points.
+    pub baseline_gap: f64,
+    /// Tight viewport-space bounds of non-generated, non-space glyphs.
+    pub grounding_bounds: LiteParseRect,
     /// Counter-clockwise radians in `[0, 2π)` with page rotation folded in.
     pub angle_radians: f32,
     pub text_width: f32,
@@ -58,25 +68,34 @@ pub struct LiteParseRawTextItem {
     pub y: f32,
     pub width: f32,
     pub height: f32,
-    /// Tight viewport-space bounds of non-generated, non-space glyphs.
-    pub grounding_bounds: LiteParseRectValue,
-    /// Advance gap across a lone generated space, in page points.
-    pub baseline_gap: f64,
-    pub has_baseline_gap: bool,
-    pub mcid: i32,
-    pub has_mcid: bool,
     pub font_size: f32,
-    pub font_weight: i32,
     pub font_height: f32,
     pub font_ascent: f32,
     pub font_descent: f32,
+    pub font_weight: i32,
+    pub mcid: i32,
     /// Packed ARGB when the colour space is reportable as RGB.
     pub fill_color: u32,
     pub stroke_color: u32,
-    pub has_fill_color: bool,
-    pub has_stroke_color: bool,
-    pub font_is_buggy: bool,
-    pub trailing_space_generated: bool,
+    pub char_code_offset: u32,
+    pub char_code_count: u32,
+    pub glyph_name_offset: u32,
+    pub glyph_name_count: u32,
+    /// `LITEPARSE_RAW_ITEM_FLAG_*` bits.
+    pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseRawTextView {
+    pub pages: *const LiteParseRawTextPage,
+    pub pages_len: usize,
+    pub items: *const LiteParseRawTextItem,
+    pub items_len: usize,
+    pub char_codes: *const u32,
+    pub char_codes_len: usize,
+    pub glyph_names: *const LiteParseByteView,
+    pub glyph_names_len: usize,
 }
 
 struct OwnedPage {
@@ -84,144 +103,137 @@ struct OwnedPage {
     page_label: Option<String>,
     page_width: f32,
     page_height: f32,
-    geometry: Option<LiteParsePageGeometry>,
+    geometry: Option<(LiteParsePageGeometry, bool)>,
     items: Vec<RawTextItem>,
 }
 
 pub(crate) struct RawTextState {
-    pages: Vec<OwnedPage>,
-    page_views: Vec<LiteParseRawTextPage>,
-    item_views: Vec<Vec<LiteParseRawTextItem>>,
-    glyph_name_views: Vec<Vec<Vec<LiteParseByteView>>>,
+    /// Owns the strings the records borrow.
+    #[allow(dead_code)]
+    source: Vec<OwnedPage>,
+    /// Backing storage for `view`.
+    #[allow(dead_code)]
+    pages: Vec<LiteParseRawTextPage>,
+    #[allow(dead_code)]
+    items: Vec<LiteParseRawTextItem>,
+    #[allow(dead_code)]
+    char_codes: Vec<u32>,
+    #[allow(dead_code)]
+    glyph_names: Vec<LiteParseByteView>,
+    view: LiteParseRawTextView,
 }
+
+view_state!(RawTextState => LiteParseRawTextView, view);
 
 impl RawTextState {
-    fn pack(pages: Vec<OwnedPage>) -> Self {
-        let mut state = Self {
-            pages,
-            page_views: Vec::new(),
-            item_views: Vec::new(),
-            glyph_name_views: Vec::new(),
-        };
-        state.page_views = state
-            .pages
-            .iter()
-            .map(|page| {
-                let (geometry, has_geometry) = page
-                    .geometry
-                    .map(|geometry| (geometry, true))
-                    .unwrap_or_default();
-                LiteParseRawTextPage {
-                    page_number: page.page_number,
-                    page_label: optional_str_view(page.page_label.as_deref()),
-                    page_width: page.page_width,
-                    page_height: page.page_height,
-                    geometry,
-                    has_geometry,
-                }
-            })
-            .collect();
-        state.glyph_name_views = state
-            .pages
-            .iter()
-            .map(|page| {
-                page.items
-                    .iter()
-                    .map(|item| {
-                        item.glyph_names
-                            .as_ref()
-                            .map(|names| {
-                                names
-                                    .iter()
-                                    .map(|name| bytes_view(name.as_bytes()))
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect()
-            })
-            .collect();
-        state.item_views = state
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(page_index, page)| {
-                page.items
-                    .iter()
-                    .enumerate()
-                    .map(|(item_index, item)| {
-                        pack_item(item, &state.glyph_name_views[page_index][item_index])
-                    })
-                    .collect()
-            })
-            .collect();
-        state
-    }
-}
-
-fn pack_item(item: &RawTextItem, glyph_names: &[LiteParseByteView]) -> LiteParseRawTextItem {
-    let (mcid, has_mcid) = match item.mcid {
-        Some(mcid) => (mcid, true),
-        None => (0, false),
-    };
-    let (fill_color, has_fill_color) = match item.fill_color {
-        Some(color) => (color, true),
-        None => (0, false),
-    };
-    let (stroke_color, has_stroke_color) = match item.stroke_color {
-        Some(color) => (color, true),
-        None => (0, false),
-    };
-    LiteParseRawTextItem {
-        text: bytes_view(item.text.as_bytes()),
-        font_name: bytes_view(item.font_name.as_bytes()),
-        char_codes: if item.char_codes.is_empty() {
-            std::ptr::null()
-        } else {
-            item.char_codes.as_ptr()
-        },
-        char_codes_len: item.char_codes.len(),
-        glyph_names: if glyph_names.is_empty() {
-            std::ptr::null()
-        } else {
-            glyph_names.as_ptr()
-        },
-        glyph_names_len: glyph_names.len(),
-        has_glyph_names: item.glyph_names.is_some(),
-        angle_radians: item.angle_radians,
-        text_width: item.text_width,
-        x: item.x,
-        y: item.y,
-        width: item.width,
-        height: item.height,
-        grounding_bounds: item
-            .grounding_bounds
-            .as_ref()
-            .map(|bounds| LiteParseRectValue {
-                rect: LiteParseRect {
+    fn pack(mut source: Vec<OwnedPage>) -> Self {
+        let mut pages = Vec::with_capacity(source.len());
+        let mut items = Vec::new();
+        let mut char_codes = Vec::new();
+        let mut glyph_names = Vec::new();
+        for page in &mut source {
+            let item_offset = items.len();
+            for item in &mut page.items {
+                let char_code_offset = char_codes.len();
+                let item_char_codes = std::mem::take(&mut item.char_codes);
+                char_codes.extend(item_char_codes);
+                let glyph_name_offset = glyph_names.len();
+                glyph_names.extend(
+                    item.glyph_names
+                        .iter()
+                        .flatten()
+                        .map(|name| bytes_view(name.as_bytes())),
+                );
+                let (mcid, has_mcid) = optional(item.mcid);
+                let (fill_color, has_fill_color) = optional(item.fill_color);
+                let (stroke_color, has_stroke_color) = optional(item.stroke_color);
+                let (baseline_gap, has_baseline_gap) = optional(item.baseline_gap);
+                let grounding_bounds = item.grounding_bounds.as_ref().map(|bounds| LiteParseRect {
                     x: bounds.left,
                     y: bounds.top,
                     width: bounds.right - bounds.left,
                     height: bounds.bottom - bounds.top,
-                },
-                present: true,
-            })
-            .unwrap_or_default(),
-        baseline_gap: item.baseline_gap.unwrap_or_default(),
-        has_baseline_gap: item.baseline_gap.is_some(),
-        mcid,
-        has_mcid,
-        font_size: item.font_size,
-        font_weight: item.font_weight,
-        font_height: item.font_height,
-        font_ascent: item.font_ascent,
-        font_descent: item.font_descent,
-        fill_color,
-        stroke_color,
-        has_fill_color,
-        has_stroke_color,
-        font_is_buggy: item.font_is_buggy,
-        trailing_space_generated: item.trailing_space_generated,
+                });
+                items.push(LiteParseRawTextItem {
+                    text: bytes_view(item.text.as_bytes()),
+                    font_name: bytes_view(item.font_name.as_bytes()),
+                    baseline_gap,
+                    grounding_bounds: grounding_bounds.unwrap_or_default(),
+                    angle_radians: item.angle_radians,
+                    text_width: item.text_width,
+                    x: item.x,
+                    y: item.y,
+                    width: item.width,
+                    height: item.height,
+                    font_size: item.font_size,
+                    font_height: item.font_height,
+                    font_ascent: item.font_ascent,
+                    font_descent: item.font_descent,
+                    font_weight: item.font_weight,
+                    mcid,
+                    fill_color,
+                    stroke_color,
+                    char_code_offset: packed_len(char_code_offset),
+                    char_code_count: packed_len(char_codes.len() - char_code_offset),
+                    glyph_name_offset: packed_len(glyph_name_offset),
+                    glyph_name_count: packed_len(glyph_names.len() - glyph_name_offset),
+                    flags: flag_bits(&[
+                        (
+                            item.glyph_names.is_some(),
+                            LITEPARSE_RAW_ITEM_FLAG_HAS_GLYPH_NAMES,
+                        ),
+                        (
+                            grounding_bounds.is_some(),
+                            LITEPARSE_RAW_ITEM_FLAG_HAS_GROUNDING_BOUNDS,
+                        ),
+                        (has_baseline_gap, LITEPARSE_RAW_ITEM_FLAG_HAS_BASELINE_GAP),
+                        (has_mcid, LITEPARSE_RAW_ITEM_FLAG_HAS_MCID),
+                        (has_fill_color, LITEPARSE_RAW_ITEM_FLAG_HAS_FILL_COLOR),
+                        (has_stroke_color, LITEPARSE_RAW_ITEM_FLAG_HAS_STROKE_COLOR),
+                        (item.font_is_buggy, LITEPARSE_RAW_ITEM_FLAG_FONT_IS_BUGGY),
+                        (
+                            item.trailing_space_generated,
+                            LITEPARSE_RAW_ITEM_FLAG_TRAILING_SPACE_GENERATED,
+                        ),
+                    ]),
+                });
+            }
+            let (geometry, has_rotation) = page.geometry.unwrap_or_default();
+            pages.push(LiteParseRawTextPage {
+                label: optional_str_view(page.page_label.as_deref()),
+                geometry,
+                page_number: page.page_number,
+                flags: flag_bits(&[
+                    (
+                        page.geometry.is_some(),
+                        LITEPARSE_RAW_PAGE_FLAG_HAS_GEOMETRY,
+                    ),
+                    (has_rotation, LITEPARSE_RAW_PAGE_FLAG_HAS_ROTATION),
+                ]),
+                width: page.page_width,
+                height: page.page_height,
+                item_offset: packed_len(item_offset),
+                item_count: packed_len(page.items.len()),
+            });
+        }
+        let view = LiteParseRawTextView {
+            pages: array_ptr(&pages),
+            pages_len: pages.len(),
+            items: array_ptr(&items),
+            items_len: items.len(),
+            char_codes: array_ptr(&char_codes),
+            char_codes_len: char_codes.len(),
+            glyph_names: array_ptr(&glyph_names),
+            glyph_names_len: glyph_names.len(),
+        };
+        Self {
+            source,
+            pages,
+            items,
+            char_codes,
+            glyph_names,
+            view,
+        }
     }
 }
 
@@ -235,58 +247,29 @@ pub(crate) fn extract_raw_text(
         &document,
         &state.config.page_orientation_corrections,
     )?;
-    let page_count = document.page_count().max(0) as u32;
-    let mut pages = match pages {
-        Some(pages) => pages,
-        None => (1..=page_count).collect(),
-    };
-    pages.truncate(state.config.max_pages);
-
     let resolver = state.glyph_resolver.as_deref();
-    let mut owned = Vec::with_capacity(pages.len());
-    for page_num in pages {
-        let extracted = (|| -> FfiResult<OwnedPage> {
-            let page_index = (page_num as i32) - 1;
-            let page = document.page(page_index)?;
-            let raw_page_width = page.width();
-            let raw_page_height = page.height();
-            let view_box = page.view_box().unwrap_or(RectF {
-                left: 0.0,
-                top: raw_page_height,
-                right: raw_page_width,
-                bottom: 0.0,
-            });
-            let (page_width, page_height) = page.viewport_size(&view_box);
-            let geometry = LiteParsePageGeometry::from_pdfium(&page);
+    let owned = map_pages(
+        &document,
+        pages,
+        state.config.max_pages,
+        &state.config,
+        "raw-text",
+        |page_num, page| {
+            let page_index = page_num as i32 - 1;
+            let facts = page_facts(page);
             let text_page = page.text()?;
-            let mut items = extract_raw_text_items(&page, &text_page, &view_box, resolver);
-            append_raw_widget_text_items(&document, &page, page_index, resolver, &mut items);
+            let mut items = extract_raw_text_items(page, &text_page, &facts.view_box, resolver);
+            append_raw_widget_text_items(&document, page, page_index, resolver, &mut items);
             Ok(OwnedPage {
                 page_number: page_num,
                 page_label: document.page_label(page_index),
-                page_width,
-                page_height,
-                geometry,
+                page_width: facts.width,
+                page_height: facts.height,
+                geometry: facts.geometry,
                 items,
             })
-        })();
-
-        match extracted {
-            Ok(page) => owned.push(page),
-            Err(error)
-                if state.config.continue_on_page_error
-                    && error.status == LITEPARSE_STATUS_PARSE_ERROR =>
-            {
-                if !state.config.quiet {
-                    eprintln!(
-                        "[raw-text] page {page_num} failed: {} — skipping (continue_on_page_error)",
-                        error.message
-                    );
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
+        },
+    )?;
     Ok(RawTextState::pack(owned))
 }
 
@@ -296,50 +279,12 @@ pub unsafe extern "C" fn liteparse_raw_text_free(raw_text: *mut LiteParseRawText
     unsafe { free_handle(raw_text) };
 }
 
-/// Return the number of extracted pages.
+/// Borrow the extracted runs; null for a null handle.
 ///
-/// # Safety
-///
-/// `raw_text` must be live.
+/// `raw_text` must be null or live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_raw_text_page_count(raw_text: *const LiteParseRawText) -> usize {
-    unsafe { state_ref(raw_text) }.map_or(0, |state| state.pages.len())
-}
-
-/// Borrow the extracted pages.
-///
-/// # Safety
-///
-/// `raw_text` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_raw_text_pages(
+pub unsafe extern "C" fn liteparse_raw_text_view(
     raw_text: *const LiteParseRawText,
-    out_len: *mut usize,
-) -> *const LiteParseRawTextPage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(raw_text)?.page_views.as_slice()))
-        })
-    }
-}
-
-/// Borrow one page's raw text items.
-///
-/// # Safety
-///
-/// `raw_text` must be live and `out_len` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn liteparse_raw_text_items(
-    raw_text: *const LiteParseRawText,
-    page_index: usize,
-    out_len: *mut usize,
-) -> *const LiteParseRawTextItem {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(state_ref(raw_text)?
-                .item_views
-                .get(page_index)
-                .map(Vec::as_slice))
-        })
-    }
+) -> *const LiteParseRawTextView {
+    unsafe { view_of(raw_text) }
 }

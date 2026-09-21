@@ -2128,7 +2128,8 @@ fn is_diagonal_rotation(rotation: f32) -> bool {
 /// Running here (after OCR merge, before projection) means both native and
 /// OCR-sourced items are filtered and removed text never reaches the output.
 /// No-op when neither filter is requested.
-pub(crate) fn apply_content_filters(
+#[doc(hidden)]
+pub fn apply_content_filters(
     pages: &mut [LitePage],
     crop_box: Option<&crate::config::CropBox>,
     skip_diagonal: bool,
