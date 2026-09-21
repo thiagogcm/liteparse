@@ -95,6 +95,112 @@ static bool check_typed_result(const LiteParseResult *result) {
 
   size_t image_count = 0;
   (void)liteparse_result_images(result, &image_count);
+
+  LiteParseProjectedLayoutAbi layout_abi = liteparse_projected_layout_abi();
+  if (layout_abi.version != LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION ||
+      layout_abi.layout_bytes_size != sizeof(LiteParseLayoutBytes) ||
+      layout_abi.layout_bytes_align != _Alignof(LiteParseLayoutBytes) ||
+      layout_abi.projected_page_size != sizeof(LiteParseProjectedLayoutPage) ||
+      layout_abi.projected_page_align != _Alignof(LiteParseProjectedLayoutPage) ||
+      layout_abi.projected_line_size != sizeof(LiteParseProjectedLine) ||
+      layout_abi.projected_line_align != _Alignof(LiteParseProjectedLine) ||
+      layout_abi.projected_span_size != sizeof(LiteParseProjectedSpan) ||
+      layout_abi.projected_span_align != _Alignof(LiteParseProjectedSpan) ||
+      layout_abi.projected_word_size != sizeof(LiteParseProjectedWord) ||
+      layout_abi.projected_word_align != _Alignof(LiteParseProjectedWord) ||
+      layout_abi.projected_region_size != sizeof(LiteParseProjectedRegion) ||
+      layout_abi.projected_region_align != _Alignof(LiteParseProjectedRegion) ||
+      layout_abi.line_span_offset != offsetof(LiteParseProjectedLine, span_offset) ||
+      layout_abi.line_region_path_offset !=
+          offsetof(LiteParseProjectedLine, region_path_offset) ||
+      layout_abi.span_char_code_offset !=
+          offsetof(LiteParseProjectedSpan, char_code_offset) ||
+      layout_abi.span_word_offset != offsetof(LiteParseProjectedSpan, word_offset) ||
+      layout_abi.page_region_offset !=
+          offsetof(LiteParseProjectedLayoutPage, region_offset) ||
+      layout_abi.region_child_offset !=
+          offsetof(LiteParseProjectedRegion, child_offset) ||
+      layout_abi.layout_bytes_len_offset != offsetof(LiteParseLayoutBytes, len)) {
+    return fail("projected_layout_abi");
+  }
+
+  LiteParseProjectedLayoutSnapshot snapshot =
+      liteparse_result_projected_layout_snapshot(result);
+  size_t page_count = 0;
+  const LiteParseProjectedLayoutPage *pages =
+      liteparse_result_projected_layout_pages(result, &page_count);
+  size_t line_count = 0;
+  const LiteParseProjectedLine *lines =
+      liteparse_result_projected_layout_lines(result, &line_count);
+  size_t span_count = 0;
+  const LiteParseProjectedSpan *spans =
+      liteparse_result_projected_layout_spans(result, &span_count);
+  size_t word_count = 0;
+  const LiteParseProjectedWord *projected_words =
+      liteparse_result_projected_layout_words(result, &word_count);
+  size_t char_code_count = 0;
+  const uint32_t *char_codes =
+      liteparse_result_projected_layout_char_codes(result, &char_code_count);
+  size_t path_count = 0;
+  const uint16_t *paths =
+      liteparse_result_projected_layout_region_paths(result, &path_count);
+  size_t region_count = 0;
+  const LiteParseProjectedRegion *regions =
+      liteparse_result_projected_layout_regions(result, &region_count);
+  size_t region_item_count = 0;
+  const uint64_t *region_items =
+      liteparse_result_projected_layout_region_items(result, &region_item_count);
+  size_t region_child_count = 0;
+  const uint64_t *region_children =
+      liteparse_result_projected_layout_region_children(result, &region_child_count);
+  if (snapshot.version != LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION ||
+      page_count != snapshot.page_count || line_count != snapshot.line_count ||
+      span_count != snapshot.span_count || word_count != snapshot.word_count ||
+      char_code_count != snapshot.char_code_count || path_count != snapshot.region_path_count ||
+      region_count != snapshot.region_count || region_item_count != snapshot.region_item_count ||
+      region_child_count != snapshot.region_child_count ||
+      (page_count != 0 && pages == NULL) || (line_count != 0 && lines == NULL) ||
+      (span_count != 0 && spans == NULL) || (region_count != 0 && regions == NULL) ||
+      (word_count != 0 && projected_words == NULL) ||
+      (char_code_count != 0 && char_codes == NULL) ||
+      (path_count != 0 && paths == NULL) ||
+      (region_item_count != 0 && region_items == NULL) ||
+      (region_child_count != 0 && region_children == NULL) ||
+      (snapshot.flags & LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE) == 0 ||
+      (snapshot.flags & LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE) == 0) {
+    return fail("projected_layout_snapshot");
+  }
+  for (size_t i = 0; i < page_count; i++) {
+    const LiteParseProjectedLayoutPage *page = &pages[i];
+    if (page->line_offset + page->line_count > line_count ||
+        page->span_offset + page->span_count > span_count ||
+        page->word_offset + page->word_count > word_count ||
+        page->char_code_offset + page->char_code_count > char_code_count ||
+        page->region_path_offset + page->region_path_count > path_count ||
+        page->region_offset + page->region_count > region_count ||
+        page->region_item_offset + page->region_item_count > region_item_count ||
+        page->region_child_offset + page->region_child_count > region_child_count) {
+      return fail("projected_layout_page_ranges");
+    }
+  }
+  for (size_t i = 0; i < line_count; i++) {
+    if (lines[i].span_offset + lines[i].span_count > span_count ||
+        lines[i].region_path_offset + lines[i].region_path_count > path_count) {
+      return fail("projected_layout_line_ranges");
+    }
+  }
+  for (size_t i = 0; i < span_count; i++) {
+    if (spans[i].word_offset + spans[i].word_count > word_count ||
+        spans[i].char_code_offset + spans[i].char_code_count > char_code_count) {
+      return fail("projected_layout_span_ranges");
+    }
+  }
+  for (size_t i = 0; i < region_count; i++) {
+    if (regions[i].child_offset + regions[i].child_count > region_child_count ||
+        regions[i].item_offset + regions[i].item_count > region_item_count) {
+      return fail("projected_layout_region_ranges");
+    }
+  }
   return true;
 }
 

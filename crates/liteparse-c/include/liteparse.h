@@ -184,6 +184,102 @@
 
 #define LITEPARSE_LAYOUT_REASON_DENSE_GRAPHICS (1 << 2)
 
+#define LITEPARSE_PROJECTED_LAYOUT_COORDINATES 1
+
+#define LITEPARSE_PROJECTED_ANCHOR_LEFT 0
+
+#define LITEPARSE_PROJECTED_ANCHOR_RIGHT 1
+
+#define LITEPARSE_PROJECTED_ANCHOR_CENTER 2
+
+#define LITEPARSE_PROJECTED_ANCHOR_FLOATING 3
+
+#define LITEPARSE_PROJECTED_REGION_NO_PARENT UINT64_MAX
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA (1 << 0)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS (1 << 1)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES (1 << 2)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE (1 << 3)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE (1 << 4)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE (1 << 5)
+
+#define LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES (1 << 6)
+
+#define LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION 1
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE (1 << 0)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME (1 << 1)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID (1 << 2)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD (1 << 3)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC (1 << 4)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO (1 << 5)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE (1 << 6)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED (1 << 7)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_RTL (1 << 8)
+
+#define LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE (1 << 9)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE (1 << 0)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE (1 << 1)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE (1 << 2)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR (1 << 3)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS (1 << 4)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT (1 << 5)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT (1 << 6)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT (1 << 7)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT (1 << 8)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH (1 << 9)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY (1 << 10)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID (1 << 11)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED (1 << 12)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES (1 << 13)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS (1 << 14)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME (1 << 15)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK (1 << 16)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR (1 << 17)
+
+#define LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR (1 << 18)
+
+#define LITEPARSE_PROJECTED_REGION_FLAG_LEAF (1 << 0)
+
+#define LITEPARSE_PROJECTED_REGION_FLAG_SPLIT (1 << 1)
+
+#define LITEPARSE_PROJECTED_REGION_FLAG_HORIZONTAL (1 << 2)
+
+#define LITEPARSE_PROJECTED_REGION_FLAG_VERTICAL (1 << 3)
+
+#define LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION 1
+
 /**
  * Values for `LiteParseStructureAttribute.kind`.
  */
@@ -1212,6 +1308,139 @@ typedef struct {
    */
   LiteParseByteView content;
 } LiteParseXfaPacket;
+
+typedef struct {
+  uint32_t version;
+  uint32_t layout_bytes_size;
+  uint32_t layout_bytes_align;
+  uint32_t projected_page_size;
+  uint32_t projected_page_align;
+  uint32_t projected_line_size;
+  uint32_t projected_line_align;
+  uint32_t projected_span_size;
+  uint32_t projected_span_align;
+  uint32_t projected_word_size;
+  uint32_t projected_word_align;
+  uint32_t projected_region_size;
+  uint32_t projected_region_align;
+  uint32_t line_span_offset;
+  uint32_t line_region_path_offset;
+  uint32_t span_char_code_offset;
+  uint32_t span_word_offset;
+  uint32_t page_region_offset;
+  uint32_t region_child_offset;
+  uint32_t layout_bytes_len_offset;
+} LiteParseProjectedLayoutAbi;
+
+typedef struct {
+  uint32_t version;
+  uint32_t coordinate_space;
+  uint32_t flags;
+  uint32_t reserved;
+  uint64_t page_count;
+  uint64_t line_count;
+  uint64_t span_count;
+  uint64_t word_count;
+  uint64_t char_code_count;
+  uint64_t region_path_count;
+  uint64_t region_count;
+  uint64_t region_item_count;
+  uint64_t region_child_count;
+} LiteParseProjectedLayoutSnapshot;
+
+typedef struct {
+  uint32_t page_number;
+  uint32_t coordinate_space;
+  uint32_t flags;
+  float width;
+  float height;
+  uint64_t line_offset;
+  uint64_t line_count;
+  uint64_t span_offset;
+  uint64_t span_count;
+  uint64_t word_offset;
+  uint64_t word_count;
+  uint64_t char_code_offset;
+  uint64_t char_code_count;
+  uint64_t region_path_offset;
+  uint64_t region_path_count;
+  uint64_t region_offset;
+  uint64_t region_count;
+  uint64_t region_item_offset;
+  uint64_t region_item_count;
+  uint64_t region_child_offset;
+  uint64_t region_child_count;
+} LiteParseProjectedLayoutPage;
+
+/**
+ * Fixed-width borrowed bytes used by the projected-layout snapshot.
+ */
+typedef struct {
+  const uint8_t *ptr;
+  uint64_t len;
+} LiteParseLayoutBytes;
+
+typedef struct {
+  LiteParseLayoutBytes text;
+  LiteParseLayoutBytes dominant_font_name;
+  LiteParseRect bbox;
+  float indent_x;
+  float dominant_font_size;
+  float heading_font_size;
+  int32_t mcid;
+  uint32_t anchor;
+  uint32_t flags;
+  uint64_t span_offset;
+  uint64_t span_count;
+  uint64_t region_path_offset;
+  uint64_t region_path_count;
+} LiteParseProjectedLine;
+
+typedef struct {
+  LiteParseLayoutBytes text;
+  LiteParseLayoutBytes font_name;
+  LiteParseLayoutBytes link;
+  LiteParseLayoutBytes fill_color;
+  LiteParseLayoutBytes stroke_color;
+  float x;
+  float y;
+  float width;
+  float height;
+  float rotation;
+  float font_size;
+  float confidence;
+  int32_t font_flags;
+  float font_height;
+  float font_ascent;
+  float font_descent;
+  int32_t font_weight;
+  float text_width;
+  int32_t mcid;
+  uint64_t char_code_offset;
+  uint64_t char_code_count;
+  uint64_t word_offset;
+  uint64_t word_count;
+  uint32_t flags;
+} LiteParseProjectedSpan;
+
+typedef struct {
+  LiteParseLayoutBytes text;
+  float x;
+  float y;
+  float width;
+  float height;
+} LiteParseProjectedWord;
+
+typedef struct {
+  LiteParseRect bbox;
+  uint64_t parent_index;
+  uint64_t child_offset;
+  uint64_t child_count;
+  uint64_t item_offset;
+  uint64_t item_count;
+  uint32_t flags;
+  uint32_t reserved;
+} LiteParseProjectedRegion;
 
 /**
  * The handle is null unless `status` is `LITEPARSE_STATUS_OK`.
@@ -2315,6 +2544,43 @@ const LiteParseLayoutRow *liteparse_result_block_rows(const LiteParseResult *res
 const LiteParseByteView *liteparse_result_block_lines(const LiteParseResult *result,
                                                       size_t page_index,
                                                       size_t *out_len);
+
+/**
+ * Return the C layout facts for the projected-layout snapshot records.
+ */
+LiteParseProjectedLayoutAbi liteparse_projected_layout_abi(void);
+
+/**
+ * Borrow the projected-layout snapshot descriptor.
+ */
+LiteParseProjectedLayoutSnapshot liteparse_result_projected_layout_snapshot(const LiteParseResult *result);
+
+const LiteParseProjectedLayoutPage *liteparse_result_projected_layout_pages(const LiteParseResult *result,
+                                                                            size_t *out_len);
+
+const LiteParseProjectedLine *liteparse_result_projected_layout_lines(const LiteParseResult *result,
+                                                                      size_t *out_len);
+
+const LiteParseProjectedSpan *liteparse_result_projected_layout_spans(const LiteParseResult *result,
+                                                                      size_t *out_len);
+
+const LiteParseProjectedWord *liteparse_result_projected_layout_words(const LiteParseResult *result,
+                                                                      size_t *out_len);
+
+const LiteParseProjectedRegion *liteparse_result_projected_layout_regions(const LiteParseResult *result,
+                                                                          size_t *out_len);
+
+const uint16_t *liteparse_result_projected_layout_region_paths(const LiteParseResult *result,
+                                                               size_t *out_len);
+
+const uint64_t *liteparse_result_projected_layout_region_items(const LiteParseResult *result,
+                                                               size_t *out_len);
+
+const uint64_t *liteparse_result_projected_layout_region_children(const LiteParseResult *result,
+                                                                  size_t *out_len);
+
+const uint32_t *liteparse_result_projected_layout_char_codes(const LiteParseResult *result,
+                                                             size_t *out_len);
 
 /**
  * Borrow one page's vector path objects.

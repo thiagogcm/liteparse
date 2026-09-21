@@ -110,6 +110,42 @@ cc -std=c11 example.c -I crates/liteparse-c/include -L target/release \
   including `liteparse_parser_set_ocr_callback`; destruction must wait for
   in-flight operations.
 
+## Projected-layout snapshot
+
+`liteparse_result_projected_layout_snapshot` exposes the projected layout that
+the core retained on each parsed page. The snapshot owns flat, fixed-width
+arrays for pages, lines, spans, words, character codes, region paths, region
+nodes, region leaf items, and region children. Every offset and count is a
+`uint64_t` relative to its corresponding result-wide array.
+
+Line records include the projected text, anchor, indentation, font evidence,
+RTL and figure flags, and ranges into dedicated projected-span records. Span
+records include the retained `TextItem` metadata plus ranges into words and
+raw character codes. Word boxes are in source-page coordinates, as indicated
+by `LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES`.
+
+The line `anchor` field uses `LITEPARSE_PROJECTED_ANCHOR_*` constants. A
+region's `parent_index` is `LITEPARSE_PROJECTED_REGION_NO_PARENT` for the page
+root; child and item indices are otherwise zero-based indices into the flat
+arrays returned by the corresponding accessors.
+
+Region paths contain child ordinals from the page root. Region records are
+flattened in pre-order and expose projected bboxes, parent indices, direct
+child ranges, and leaf item ranges. Region item indices refer to the page's
+projected text-item sequence.
+
+The C layer cannot recover source-item provenance, original per-span geometry,
+or classifier block-to-line membership after the core projection pass has
+discarded those relationships. The snapshot therefore sets
+`LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE` and
+`LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE`. Consumers
+must not infer those relationships from matching text or rectangles.
+
+All snapshot arrays and byte views borrow from the result and remain valid
+until `liteparse_result_free`. Use `liteparse_projected_layout_abi()` with
+`sizeof`, `_Alignof`, and `offsetof` to verify foreign declarations at
+runtime.
+
 ## Operations on a document
 
 | Function | Notes |

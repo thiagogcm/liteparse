@@ -47,9 +47,11 @@ fn tagged_heading_pdf() -> Vec<u8> {
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
            /Resources << /Font << /F1 7 0 R >> >> /StructParents 0 >>"
             .to_vec(),
-        format!("<< /Length {} >>\nstream\n{}\nendstream", contents.len(), unsafe {
-            std::str::from_utf8_unchecked(contents)
-        })
+        format!(
+            "<< /Length {} >>\nstream\n{}\nendstream",
+            contents.len(),
+            unsafe { std::str::from_utf8_unchecked(contents) }
+        )
         .into_bytes(),
         b"<< /Type /StructTreeRoot /K [6 0 R] /ParentTree 8 0 R >>".to_vec(),
         b"<< /Type /StructElem /S /H1 /P 5 0 R /K 0 /Pg 3 0 R >>".to_vec(),
@@ -81,7 +83,8 @@ fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
 
 /// One page: a translated filled rect, a Form XObject with a stroked rect, and a 2×2 grey image.
 fn objects_pdf() -> Vec<u8> {
-    let content = b"q 1 0 0 1 10 20 cm 0 0 50 30 re f Q q /Fx1 Do Q q 40 0 0 20 100 50 cm /Im1 Do Q";
+    let content =
+        b"q 1 0 0 1 10 20 cm 0 0 50 30 re f Q q /Fx1 Do Q q 40 0 0 20 100 50 cm /Im1 Do Q";
     assemble(&[
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
@@ -421,6 +424,169 @@ fn document_reports_pages_and_parses_typed_slices() {
         boxes.iter().any(|word| word.text.len > 0)
     });
     assert!(found_words, "emit_word_boxes should populate word boxes");
+}
+
+#[test]
+fn projected_layout_snapshot_exposes_available_c_side_data() {
+    let parser = Parser::new(|config| {
+        config.bools_set |= LITEPARSE_FLAG_EMIT_WORD_BOXES | LITEPARSE_FLAG_EXTRACT_TEXT_METADATA;
+        config.bools_values |=
+            LITEPARSE_FLAG_EMIT_WORD_BOXES | LITEPARSE_FLAG_EXTRACT_TEXT_METADATA;
+    });
+    let result = parser.open("sample.pdf").parse(&[1]);
+
+    let abi = liteparse_projected_layout_abi();
+    assert_eq!(abi.version, LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION);
+    assert_eq!(
+        abi.layout_bytes_size as usize,
+        std::mem::size_of::<LiteParseLayoutBytes>()
+    );
+    assert_eq!(
+        abi.projected_page_size as usize,
+        std::mem::size_of::<LiteParseProjectedLayoutPage>()
+    );
+    assert_eq!(
+        abi.projected_line_size as usize,
+        std::mem::size_of::<LiteParseProjectedLine>()
+    );
+    assert_eq!(
+        abi.projected_span_size as usize,
+        std::mem::size_of::<LiteParseProjectedSpan>()
+    );
+    assert_eq!(
+        abi.projected_word_size as usize,
+        std::mem::size_of::<LiteParseProjectedWord>()
+    );
+    assert_eq!(
+        abi.projected_region_size as usize,
+        std::mem::size_of::<LiteParseProjectedRegion>()
+    );
+    assert_eq!(
+        abi.line_span_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedLine, span_offset)
+    );
+    assert_eq!(
+        abi.line_region_path_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedLine, region_path_offset)
+    );
+    assert_eq!(
+        abi.span_char_code_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedSpan, char_code_offset)
+    );
+    assert_eq!(
+        abi.span_word_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedSpan, word_offset)
+    );
+    assert_eq!(
+        abi.page_region_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedLayoutPage, region_offset)
+    );
+    assert_eq!(
+        abi.region_child_offset as usize,
+        std::mem::offset_of!(LiteParseProjectedRegion, child_offset)
+    );
+    assert_eq!(
+        abi.layout_bytes_len_offset as usize,
+        std::mem::offset_of!(LiteParseLayoutBytes, len)
+    );
+
+    let snapshot = unsafe { liteparse_result_projected_layout_snapshot(result.0) };
+    assert_eq!(
+        snapshot.version,
+        LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION
+    );
+    assert_ne!(
+        snapshot.flags & LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE,
+        0
+    );
+    assert_ne!(
+        snapshot.flags & LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE,
+        0
+    );
+
+    let mut page_count = 0;
+    let pages = slice(
+        unsafe { liteparse_result_projected_layout_pages(result.0, &mut page_count) },
+        page_count,
+    );
+    let mut line_count = 0;
+    let lines = slice(
+        unsafe { liteparse_result_projected_layout_lines(result.0, &mut line_count) },
+        line_count,
+    );
+    let mut span_count = 0;
+    let spans = slice(
+        unsafe { liteparse_result_projected_layout_spans(result.0, &mut span_count) },
+        span_count,
+    );
+    let mut word_count = 0;
+    let words = slice(
+        unsafe { liteparse_result_projected_layout_words(result.0, &mut word_count) },
+        word_count,
+    );
+    let mut char_code_count = 0;
+    let char_codes = slice(
+        unsafe { liteparse_result_projected_layout_char_codes(result.0, &mut char_code_count) },
+        char_code_count,
+    );
+    let mut path_count = 0;
+    let paths = slice(
+        unsafe { liteparse_result_projected_layout_region_paths(result.0, &mut path_count) },
+        path_count,
+    );
+    let mut region_count = 0;
+    let regions = slice(
+        unsafe { liteparse_result_projected_layout_regions(result.0, &mut region_count) },
+        region_count,
+    );
+    let mut item_count = 0;
+    let region_items = slice(
+        unsafe { liteparse_result_projected_layout_region_items(result.0, &mut item_count) },
+        item_count,
+    );
+    let mut child_count = 0;
+    let region_children = slice(
+        unsafe { liteparse_result_projected_layout_region_children(result.0, &mut child_count) },
+        child_count,
+    );
+
+    assert_eq!(pages.len(), snapshot.page_count as usize);
+    assert_eq!(lines.len(), snapshot.line_count as usize);
+    assert_eq!(spans.len(), snapshot.span_count as usize);
+    assert_eq!(words.len(), snapshot.word_count as usize);
+    assert_eq!(char_codes.len(), snapshot.char_code_count as usize);
+    assert_eq!(paths.len(), snapshot.region_path_count as usize);
+    assert_eq!(regions.len(), snapshot.region_count as usize);
+    assert_eq!(region_items.len(), snapshot.region_item_count as usize);
+    assert_eq!(region_children.len(), snapshot.region_child_count as usize);
+
+    for page in pages {
+        assert!((page.line_offset + page.line_count) as usize <= lines.len());
+        assert!((page.span_offset + page.span_count) as usize <= spans.len());
+        assert!((page.word_offset + page.word_count) as usize <= words.len());
+        assert!((page.char_code_offset + page.char_code_count) as usize <= char_codes.len());
+        assert!((page.region_path_offset + page.region_path_count) as usize <= paths.len());
+        assert!((page.region_offset + page.region_count) as usize <= regions.len());
+        assert!((page.region_item_offset + page.region_item_count) as usize <= region_items.len());
+        assert!(
+            (page.region_child_offset + page.region_child_count) as usize <= region_children.len()
+        );
+    }
+    for line in lines {
+        assert!((line.span_offset + line.span_count) as usize <= spans.len());
+        assert!((line.region_path_offset + line.region_path_count) as usize <= paths.len());
+    }
+    for span in spans {
+        assert!((span.word_offset + span.word_count) as usize <= words.len());
+        assert!((span.char_code_offset + span.char_code_count) as usize <= char_codes.len());
+    }
+    for region in regions {
+        assert!((region.child_offset + region.child_count) as usize <= region_children.len());
+        assert!((region.item_offset + region.item_count) as usize <= region_items.len());
+        if region.parent_index != u64::MAX {
+            assert!((region.parent_index as usize) < regions.len());
+        }
+    }
 }
 
 #[test]
@@ -1114,12 +1280,13 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
         page_len,
     );
     assert_eq!(page_len, 4);
-    let labels: Vec<String> = pages
-        .iter()
-        .map(|page| view_str(page.page_label))
-        .collect();
+    let labels: Vec<String> = pages.iter().map(|page| view_str(page.page_label)).collect();
     assert_eq!(labels, ["i", "ii", "1", "2"]);
-    assert!(pages.iter().all(|page| page.has_geometry && page.page_width > 0.0));
+    assert!(
+        pages
+            .iter()
+            .all(|page| page.has_geometry && page.page_width > 0.0)
+    );
 
     let mut item_len = 0usize;
     let items = slice(
@@ -1144,7 +1311,10 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
     let last = 4u32;
     let last_only = unsafe { liteparse_document_raw_text(document.0, &last, 1) };
     assert_eq!(last_only.status, LITEPARSE_STATUS_OK);
-    assert_eq!(unsafe { liteparse_raw_text_page_count(last_only.handle) }, 1);
+    assert_eq!(
+        unsafe { liteparse_raw_text_page_count(last_only.handle) },
+        1
+    );
     let mut one = 0usize;
     let only = slice(
         unsafe { liteparse_raw_text_pages(last_only.handle, &mut one) },
@@ -1184,7 +1354,10 @@ fn max_pages_truncates_direct_paths() {
 
     let objects = unsafe { liteparse_document_page_objects(document.0, ptr::null(), 0, 0) };
     assert_eq!(objects.status, LITEPARSE_STATUS_OK);
-    assert_eq!(unsafe { liteparse_page_objects_page_count(objects.handle) }, 1);
+    assert_eq!(
+        unsafe { liteparse_page_objects_page_count(objects.handle) },
+        1
+    );
     unsafe { liteparse_page_objects_free(objects.handle) };
 }
 
@@ -1206,10 +1379,7 @@ fn extract_forwards_page_labels_and_skips_projection() {
         unsafe { liteparse_extract_pages(extracted.handle, &mut page_len) },
         page_len,
     );
-    let labels: Vec<String> = pages
-        .iter()
-        .map(|page| view_str(page.page_label))
-        .collect();
+    let labels: Vec<String> = pages.iter().map(|page| view_str(page.page_label)).collect();
     assert_eq!(labels, ["i", "ii", "1", "2"]);
     assert_eq!(
         view_str(unsafe { liteparse_extract_page_label(extracted.handle, 0) }),
@@ -1255,7 +1425,10 @@ fn extract_as_content_round_trips_into_parse_content() {
         view_str(liteparse_last_error())
     );
     let content = unsafe { liteparse_extract_as_content(extracted.handle) };
-    assert_eq!(content.size_of_content, std::mem::size_of::<LiteParseContent>());
+    assert_eq!(
+        content.size_of_content,
+        std::mem::size_of::<LiteParseContent>()
+    );
     assert!(content.pages_len > 0 && content.items_len > 0);
     let from_extract = parser.parse_content(&content);
     let from_parse = document.parse(&[]);
@@ -1283,10 +1456,7 @@ fn extract_geometry_matches_parse() {
         let from_extract = unsafe { liteparse_extract_page_geometry(extracted.handle, index) };
         let from_parse = unsafe { liteparse_result_page_geometry(result.0, index) };
         assert!(from_extract.present && from_parse.present);
-        assert_eq!(
-            from_extract.geometry.box_left,
-            from_parse.geometry.box_left
-        );
+        assert_eq!(from_extract.geometry.box_left, from_parse.geometry.box_left);
         assert_eq!(
             from_extract.geometry.rotation_quarter_turns,
             from_parse.geometry.rotation_quarter_turns
@@ -1436,7 +1606,9 @@ fn extract_as_content_keeps_mcid_without_text_metadata() {
         "extract must keep mcid without EXTRACT_TEXT_METADATA"
     );
     assert!(
-        nodes.iter().any(|node| view_str(node.role).eq_ignore_ascii_case("H1")),
+        nodes
+            .iter()
+            .any(|node| view_str(node.role).eq_ignore_ascii_case("H1")),
         "expected an H1 struct node"
     );
 
@@ -1704,7 +1876,10 @@ fn page_objects_walk_path_form_and_image_without_extract_policy() {
         "{}",
         view_str(liteparse_last_error())
     );
-    assert_eq!(unsafe { liteparse_page_objects_page_count(snapshot.handle) }, 1);
+    assert_eq!(
+        unsafe { liteparse_page_objects_page_count(snapshot.handle) },
+        1
+    );
 
     let mut page_len = 0usize;
     let pages = slice(
@@ -1759,10 +1934,12 @@ fn page_objects_walk_path_form_and_image_without_extract_policy() {
     assert!(path_segments[0].has_kind && path_segments[0].has_point);
     assert_eq!(path_segments[0].kind, LITEPARSE_PATH_SEGMENT_MOVETO);
     assert_eq!((path_segments[0].x, path_segments[0].y), (0.0, 0.0));
-    assert!(path_segments
-        .iter()
-        .skip(1)
-        .all(|segment| segment.has_kind && segment.kind == LITEPARSE_PATH_SEGMENT_LINETO));
+    assert!(
+        path_segments
+            .iter()
+            .skip(1)
+            .all(|segment| segment.has_kind && segment.kind == LITEPARSE_PATH_SEGMENT_LINETO)
+    );
     assert!(path_segments.iter().any(|segment| segment.close));
     assert!(path.image_raw.ptr.is_null() && path.image_raw.len == 0);
 
@@ -1779,7 +1956,11 @@ fn page_objects_walk_path_form_and_image_without_extract_policy() {
     assert_eq!(image.kind, LITEPARSE_PAGE_OBJECT_IMAGE);
     assert!(image.has_image_metadata);
     assert_eq!(
-        (image.image_width, image.image_height, image.image_bits_per_pixel),
+        (
+            image.image_width,
+            image.image_height,
+            image.image_bits_per_pixel
+        ),
         (2, 2, 8)
     );
     assert_eq!(image.filter_count, 0);
@@ -1852,7 +2033,10 @@ fn orientation_correction_180_restores_upright_parse() {
         (size.width, size.height)
     };
 
-    let corrections = [LiteParsePageOrientationCorrection { page: 1, angle: 180 }];
+    let corrections = [LiteParsePageOrientationCorrection {
+        page: 1,
+        angle: 180,
+    }];
     let corrected = orientation_parser(&corrections)
         .open("sample_rotated_180.pdf")
         .parse(&[]);
@@ -1889,24 +2073,37 @@ fn orientation_correction_90_restores_upright_parse_and_screenshots() {
     let shots = document.screenshot(0.0, None);
     assert_eq!(shots.status, LITEPARSE_STATUS_OK);
     let mut len = 0usize;
-    let slices = slice(unsafe { liteparse_screenshots_slice(shots.handle, &mut len) }, len);
+    let slices = slice(
+        unsafe { liteparse_screenshots_slice(shots.handle, &mut len) },
+        len,
+    );
     assert_eq!(len, 1);
     let upright_shots = Parser::plain().open("sample.pdf").screenshot(0.0, None);
     let mut ulen = 0usize;
-    let uslices =
-        slice(unsafe { liteparse_screenshots_slice(upright_shots.handle, &mut ulen) }, ulen);
-    assert_eq!((slices[0].width, slices[0].height), (uslices[0].width, uslices[0].height));
+    let uslices = slice(
+        unsafe { liteparse_screenshots_slice(upright_shots.handle, &mut ulen) },
+        ulen,
+    );
+    assert_eq!(
+        (slices[0].width, slices[0].height),
+        (uslices[0].width, uslices[0].height)
+    );
 }
 
 #[test]
 fn orientation_correction_ignores_out_of_range_and_rejects_bad_angle() {
     // Out-of-range pages and angle 0 are no-ops.
     let corrections = [
-        LiteParsePageOrientationCorrection { page: 7, angle: 180 },
+        LiteParsePageOrientationCorrection {
+            page: 7,
+            angle: 180,
+        },
         LiteParsePageOrientationCorrection { page: 1, angle: 0 },
     ];
     let plain = Parser::plain().open("sample.pdf").parse(&[]);
-    let ignored = orientation_parser(&corrections).open("sample.pdf").parse(&[]);
+    let ignored = orientation_parser(&corrections)
+        .open("sample.pdf")
+        .parse(&[]);
     assert_eq!(page_text(&ignored, 0), page_text(&plain, 0));
 
     // Non-cardinal angles fail fast at parser creation.

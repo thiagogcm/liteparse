@@ -2,9 +2,10 @@ use liteparse::ScreenshotResult;
 use liteparse::layout::{LayoutBlock, LayoutCell};
 use liteparse::ocr_merge::{ComplexityReason, LayoutComplexityReason, PageComplexityStats};
 use liteparse::types::{
-    DocumentAnnotation, DocumentMetadata, ExtractedImage, FormField, ImageRef, OutlineTarget,
-    PageError, Rect, ScreenshotRect, StructNode, StructureAttributeValue, StructureTree,
-    StructureTreeElement, TextItem, VectorGraphics, WordBox, XfaPacket,
+    CutAxis, DocumentAnnotation, DocumentMetadata, ExtractedImage, FormField, ImageRef,
+    OutlineTarget, PageError, Rect, Region, RegionKind, ScreenshotRect, StructNode,
+    StructureAttributeValue, StructureTree, StructureTreeElement, TextItem, VectorGraphics,
+    WordBox, XfaPacket,
 };
 
 use crate::document::DescriptiveInfo;
@@ -182,6 +183,206 @@ pub struct LiteParseTextItem {
     pub trailing_space_generated: bool,
     pub has_trailing_space_generated: bool,
 }
+
+/// Fixed-width borrowed bytes used by the projected-layout snapshot.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseLayoutBytes {
+    pub ptr: *const u8,
+    pub len: u64,
+}
+
+pub const LITEPARSE_PROJECTED_LAYOUT_COORDINATES: u32 = 1;
+pub const LITEPARSE_PROJECTED_ANCHOR_LEFT: u32 = 0;
+pub const LITEPARSE_PROJECTED_ANCHOR_RIGHT: u32 = 1;
+pub const LITEPARSE_PROJECTED_ANCHOR_CENTER: u32 = 2;
+pub const LITEPARSE_PROJECTED_ANCHOR_FLOATING: u32 = 3;
+pub const LITEPARSE_PROJECTED_REGION_NO_PARENT: u64 = u64::MAX;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA: u32 = 1 << 0;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS: u32 = 1 << 1;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES: u32 = 1 << 2;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE: u32 = 1 << 3;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE: u32 = 1 << 4;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE: u32 = 1 << 5;
+pub const LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES: u32 = 1 << 6;
+pub const LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION: u32 = 1;
+
+pub const LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE: u32 = 1 << 0;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME: u32 = 1 << 1;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID: u32 = 1 << 2;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD: u32 = 1 << 3;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC: u32 = 1 << 4;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO: u32 = 1 << 5;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE: u32 = 1 << 6;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED: u32 = 1 << 7;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_RTL: u32 = 1 << 8;
+pub const LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE: u32 = 1 << 9;
+
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE: u32 = 1 << 0;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE: u32 = 1 << 1;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE: u32 = 1 << 2;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR: u32 = 1 << 3;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS: u32 = 1 << 4;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT: u32 = 1 << 5;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT: u32 = 1 << 6;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT: u32 = 1 << 7;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT: u32 = 1 << 8;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH: u32 = 1 << 9;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY: u32 = 1 << 10;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID: u32 = 1 << 11;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED: u32 = 1 << 12;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES: u32 = 1 << 13;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS: u32 = 1 << 14;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME: u32 = 1 << 15;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK: u32 = 1 << 16;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR: u32 = 1 << 17;
+pub const LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR: u32 = 1 << 18;
+
+pub const LITEPARSE_PROJECTED_REGION_FLAG_LEAF: u32 = 1 << 0;
+pub const LITEPARSE_PROJECTED_REGION_FLAG_SPLIT: u32 = 1 << 1;
+pub const LITEPARSE_PROJECTED_REGION_FLAG_HORIZONTAL: u32 = 1 << 2;
+pub const LITEPARSE_PROJECTED_REGION_FLAG_VERTICAL: u32 = 1 << 3;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedSpan {
+    pub text: LiteParseLayoutBytes,
+    pub font_name: LiteParseLayoutBytes,
+    pub link: LiteParseLayoutBytes,
+    pub fill_color: LiteParseLayoutBytes,
+    pub stroke_color: LiteParseLayoutBytes,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub rotation: f32,
+    pub font_size: f32,
+    pub confidence: f32,
+    pub font_flags: i32,
+    pub font_height: f32,
+    pub font_ascent: f32,
+    pub font_descent: f32,
+    pub font_weight: i32,
+    pub text_width: f32,
+    pub mcid: i32,
+    pub char_code_offset: u64,
+    pub char_code_count: u64,
+    pub word_offset: u64,
+    pub word_count: u64,
+    pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedWord {
+    pub text: LiteParseLayoutBytes,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedLine {
+    pub text: LiteParseLayoutBytes,
+    pub dominant_font_name: LiteParseLayoutBytes,
+    pub bbox: LiteParseRect,
+    pub indent_x: f32,
+    pub dominant_font_size: f32,
+    pub heading_font_size: f32,
+    pub mcid: i32,
+    pub anchor: u32,
+    pub flags: u32,
+    pub span_offset: u64,
+    pub span_count: u64,
+    pub region_path_offset: u64,
+    pub region_path_count: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedRegion {
+    pub bbox: LiteParseRect,
+    pub parent_index: u64,
+    pub child_offset: u64,
+    pub child_count: u64,
+    pub item_offset: u64,
+    pub item_count: u64,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedLayoutPage {
+    pub page_number: u32,
+    pub coordinate_space: u32,
+    pub flags: u32,
+    pub width: f32,
+    pub height: f32,
+    pub line_offset: u64,
+    pub line_count: u64,
+    pub span_offset: u64,
+    pub span_count: u64,
+    pub word_offset: u64,
+    pub word_count: u64,
+    pub char_code_offset: u64,
+    pub char_code_count: u64,
+    pub region_path_offset: u64,
+    pub region_path_count: u64,
+    pub region_offset: u64,
+    pub region_count: u64,
+    pub region_item_offset: u64,
+    pub region_item_count: u64,
+    pub region_child_offset: u64,
+    pub region_child_count: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedLayoutSnapshot {
+    pub version: u32,
+    pub coordinate_space: u32,
+    pub flags: u32,
+    pub reserved: u32,
+    pub page_count: u64,
+    pub line_count: u64,
+    pub span_count: u64,
+    pub word_count: u64,
+    pub char_code_count: u64,
+    pub region_path_count: u64,
+    pub region_count: u64,
+    pub region_item_count: u64,
+    pub region_child_count: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseProjectedLayoutAbi {
+    pub version: u32,
+    pub layout_bytes_size: u32,
+    pub layout_bytes_align: u32,
+    pub projected_page_size: u32,
+    pub projected_page_align: u32,
+    pub projected_line_size: u32,
+    pub projected_line_align: u32,
+    pub projected_span_size: u32,
+    pub projected_span_align: u32,
+    pub projected_word_size: u32,
+    pub projected_word_align: u32,
+    pub projected_region_size: u32,
+    pub projected_region_align: u32,
+    pub line_span_offset: u32,
+    pub line_region_path_offset: u32,
+    pub span_char_code_offset: u32,
+    pub span_word_offset: u32,
+    pub page_region_offset: u32,
+    pub region_child_offset: u32,
+    pub layout_bytes_len_offset: u32,
+}
+
+pub const LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION: u32 = 1;
 
 /// Word box in top-left-origin 72-DPI page space.
 #[repr(C)]
@@ -538,6 +739,390 @@ fn optional_rect(rect: Option<&Rect>) -> (LiteParseRect, bool) {
     optional(rect.map(LiteParseRect::from))
 }
 
+fn fixed_bytes(value: &[u8]) -> LiteParseLayoutBytes {
+    LiteParseLayoutBytes {
+        ptr: value.as_ptr(),
+        len: u64::try_from(value.len()).expect("layout byte length does not fit u64"),
+    }
+}
+
+fn optional_fixed_str(value: Option<&str>) -> LiteParseLayoutBytes {
+    value.map_or_else(LiteParseLayoutBytes::default, |value| {
+        fixed_bytes(value.as_bytes())
+    })
+}
+
+fn packed_len(value: usize) -> u64 {
+    u64::try_from(value).expect("layout array length does not fit u64")
+}
+
+fn anchor_value(anchor: &liteparse::types::Anchor) -> u32 {
+    match anchor {
+        liteparse::types::Anchor::Left => LITEPARSE_PROJECTED_ANCHOR_LEFT,
+        liteparse::types::Anchor::Right => LITEPARSE_PROJECTED_ANCHOR_RIGHT,
+        liteparse::types::Anchor::Center => LITEPARSE_PROJECTED_ANCHOR_CENTER,
+        liteparse::types::Anchor::Floating => LITEPARSE_PROJECTED_ANCHOR_FLOATING,
+    }
+}
+
+pub(crate) struct ProjectedLayoutPacked {
+    pub(crate) snapshot: LiteParseProjectedLayoutSnapshot,
+    pub(crate) pages: Vec<LiteParseProjectedLayoutPage>,
+    pub(crate) lines: Vec<LiteParseProjectedLine>,
+    pub(crate) spans: Vec<LiteParseProjectedSpan>,
+    pub(crate) words: Vec<LiteParseProjectedWord>,
+    pub(crate) char_codes: Vec<u32>,
+    pub(crate) region_paths: Vec<u16>,
+    pub(crate) regions: Vec<LiteParseProjectedRegion>,
+    pub(crate) region_items: Vec<u64>,
+    pub(crate) region_children: Vec<u64>,
+}
+
+impl ProjectedLayoutPacked {
+    pub(crate) fn pack(pages: &[liteparse::ParsedPage], metadata_enabled: bool) -> Self {
+        let mut packed = Self {
+            snapshot: LiteParseProjectedLayoutSnapshot::default(),
+            pages: Vec::with_capacity(pages.len()),
+            lines: Vec::new(),
+            spans: Vec::new(),
+            words: Vec::new(),
+            char_codes: Vec::new(),
+            region_paths: Vec::new(),
+            regions: Vec::new(),
+            region_items: Vec::new(),
+            region_children: Vec::new(),
+        };
+
+        for page in pages {
+            let line_offset = packed.lines.len();
+            let span_offset = packed.spans.len();
+            let word_offset = packed.words.len();
+            let char_code_offset = packed.char_codes.len();
+            let region_path_offset = packed.region_paths.len();
+            let region_offset = packed.regions.len();
+            let region_item_offset = packed.region_items.len();
+            let region_child_offset = packed.region_children.len();
+            flatten_region(
+                &page.regions,
+                LITEPARSE_PROJECTED_REGION_NO_PARENT,
+                &mut packed,
+            );
+
+            for line in &page.projected_lines {
+                let line_span_offset = packed.spans.len();
+                for span in &line.spans {
+                    let span_word_offset = packed.words.len();
+                    packed
+                        .words
+                        .extend(span.words.iter().map(|word| LiteParseProjectedWord {
+                            text: fixed_bytes(word.text.as_bytes()),
+                            x: word.x,
+                            y: word.y,
+                            width: word.width,
+                            height: word.height,
+                        }));
+
+                    let metadata = span.text_metadata(metadata_enabled);
+                    let span_char_code_offset = packed.char_codes.len();
+                    if let Some(char_codes) = metadata.char_codes {
+                        packed.char_codes.extend_from_slice(char_codes);
+                    }
+
+                    let mut flags = 0;
+                    let (font_size, has_font_size) = optional(span.font_size);
+                    let (confidence, has_confidence) = optional(span.confidence);
+                    let (font_flags, has_font_flags) = optional(span.font_flags);
+                    let (font_height, has_font_height) = optional(metadata.font_height);
+                    let (font_ascent, has_font_ascent) = optional(metadata.font_ascent);
+                    let (font_descent, has_font_descent) = optional(metadata.font_descent);
+                    let (font_weight, has_font_weight) = optional(metadata.font_weight);
+                    let (text_width, has_text_width) = optional(metadata.text_width);
+                    let (font_is_buggy, has_font_is_buggy) = optional(metadata.font_is_buggy);
+                    let (mcid, has_mcid) = optional(metadata.mcid);
+                    let (trailing_space_generated, has_trailing_space_generated) =
+                        optional(metadata.trailing_space_generated);
+
+                    if has_font_size {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE;
+                    }
+                    if has_confidence {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE;
+                    }
+                    if span.strike {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE;
+                    }
+                    if span.has_unicode_map_error {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR;
+                    }
+                    if has_font_flags {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS;
+                    }
+                    if has_font_height {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT;
+                    }
+                    if has_font_ascent {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT;
+                    }
+                    if has_font_descent {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT;
+                    }
+                    if has_font_weight {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT;
+                    }
+                    if has_text_width {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH;
+                    }
+                    if has_font_is_buggy && font_is_buggy {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY;
+                    }
+                    if has_mcid {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID;
+                    }
+                    if has_trailing_space_generated && trailing_space_generated {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED;
+                    }
+                    if packed.char_codes.len() > span_char_code_offset {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES;
+                    }
+                    if packed.words.len() > span_word_offset {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS;
+                    }
+                    if span.font_name.is_some() {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME;
+                    }
+                    if span.link.is_some() {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK;
+                    }
+                    if metadata.fill_color.is_some() {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR;
+                    }
+                    if metadata.stroke_color.is_some() {
+                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR;
+                    }
+
+                    packed.spans.push(LiteParseProjectedSpan {
+                        text: fixed_bytes(span.text.as_bytes()),
+                        font_name: optional_fixed_str(span.font_name.as_deref()),
+                        link: optional_fixed_str(span.link.as_deref()),
+                        fill_color: optional_fixed_str(metadata.fill_color),
+                        stroke_color: optional_fixed_str(metadata.stroke_color),
+                        x: span.x,
+                        y: span.y,
+                        width: span.width,
+                        height: span.height,
+                        rotation: span.rotation,
+                        font_size,
+                        confidence,
+                        font_flags,
+                        font_height,
+                        font_ascent,
+                        font_descent,
+                        font_weight,
+                        text_width,
+                        mcid,
+                        char_code_offset: packed_len(span_char_code_offset),
+                        char_code_count: packed_len(
+                            packed.char_codes.len() - span_char_code_offset,
+                        ),
+                        word_offset: packed_len(span_word_offset),
+                        word_count: packed_len(packed.words.len() - span_word_offset),
+                        flags,
+                    });
+                }
+
+                let line_region_path_offset = packed.region_paths.len();
+                packed.region_paths.extend_from_slice(&line.region_path);
+                let mut flags = 0;
+                if line.heading_font_size.is_some() {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE;
+                }
+                if line.dominant_font_name.is_some() {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME;
+                }
+                if line.mcid.is_some() {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID;
+                }
+                if line.all_bold {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD;
+                }
+                if line.all_italic {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC;
+                }
+                if line.all_mono {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO;
+                }
+                if line.all_strike {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE;
+                }
+                if line.font_size_is_estimated {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED;
+                }
+                if line.rtl {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_RTL;
+                }
+                if line.in_figure {
+                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE;
+                }
+
+                packed.lines.push(LiteParseProjectedLine {
+                    text: fixed_bytes(line.text.as_bytes()),
+                    dominant_font_name: optional_fixed_str(line.dominant_font_name.as_deref()),
+                    bbox: LiteParseRect::from(&line.bbox),
+                    indent_x: line.indent_x,
+                    dominant_font_size: line.dominant_font_size,
+                    heading_font_size: line.heading_font_size.unwrap_or_default(),
+                    mcid: line.mcid.unwrap_or_default(),
+                    anchor: anchor_value(&line.anchor),
+                    flags,
+                    span_offset: packed_len(line_span_offset),
+                    span_count: packed_len(packed.spans.len() - line_span_offset),
+                    region_path_offset: packed_len(line_region_path_offset),
+                    region_path_count: packed_len(line.region_path.len()),
+                });
+            }
+
+            let mut flags = LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE
+                | LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE
+                | LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES;
+            if metadata_enabled {
+                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA;
+            }
+            if packed.words.len() > word_offset {
+                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS;
+            }
+            if packed.char_codes.len() > char_code_offset {
+                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES;
+            }
+            if packed.regions.len() > region_offset {
+                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE;
+            }
+            packed.pages.push(LiteParseProjectedLayoutPage {
+                page_number: u32::try_from(page.page_number).expect("page number does not fit u32"),
+                coordinate_space: LITEPARSE_PROJECTED_LAYOUT_COORDINATES,
+                flags,
+                width: page.page_width,
+                height: page.page_height,
+                line_offset: packed_len(line_offset),
+                line_count: packed_len(packed.lines.len() - line_offset),
+                span_offset: packed_len(span_offset),
+                span_count: packed_len(packed.spans.len() - span_offset),
+                word_offset: packed_len(word_offset),
+                word_count: packed_len(packed.words.len() - word_offset),
+                char_code_offset: packed_len(char_code_offset),
+                char_code_count: packed_len(packed.char_codes.len() - char_code_offset),
+                region_path_offset: packed_len(region_path_offset),
+                region_path_count: packed_len(packed.region_paths.len() - region_path_offset),
+                region_offset: packed_len(region_offset),
+                region_count: packed_len(packed.regions.len() - region_offset),
+                region_item_offset: packed_len(region_item_offset),
+                region_item_count: packed_len(packed.region_items.len() - region_item_offset),
+                region_child_offset: packed_len(region_child_offset),
+                region_child_count: packed_len(packed.region_children.len() - region_child_offset),
+            });
+        }
+
+        let mut flags = LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE
+            | LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE
+            | LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES;
+        if metadata_enabled {
+            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA;
+        }
+        if !packed.words.is_empty() {
+            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS;
+        }
+        if !packed.char_codes.is_empty() {
+            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES;
+        }
+        if !packed.regions.is_empty() {
+            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE;
+        }
+        packed.snapshot = LiteParseProjectedLayoutSnapshot {
+            version: LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION,
+            coordinate_space: LITEPARSE_PROJECTED_LAYOUT_COORDINATES,
+            flags,
+            reserved: 0,
+            page_count: packed_len(packed.pages.len()),
+            line_count: packed_len(packed.lines.len()),
+            span_count: packed_len(packed.spans.len()),
+            word_count: packed_len(packed.words.len()),
+            char_code_count: packed_len(packed.char_codes.len()),
+            region_path_count: packed_len(packed.region_paths.len()),
+            region_count: packed_len(packed.regions.len()),
+            region_item_count: packed_len(packed.region_items.len()),
+            region_child_count: packed_len(packed.region_children.len()),
+        };
+        packed
+    }
+}
+
+fn flatten_region(region: &Region, parent_index: u64, packed: &mut ProjectedLayoutPacked) {
+    let node_index = packed.regions.len() as u64;
+    packed.regions.push(LiteParseProjectedRegion {
+        bbox: LiteParseRect::from(&region.bbox),
+        parent_index,
+        ..Default::default()
+    });
+    let item_offset = packed.region_items.len();
+    let child_offset = packed.region_children.len();
+    let (flags, child_count) = match &region.kind {
+        RegionKind::Leaf { item_indices } => {
+            packed
+                .region_items
+                .extend(item_indices.iter().map(|index| *index as u64));
+            (LITEPARSE_PROJECTED_REGION_FLAG_LEAF, 0)
+        }
+        RegionKind::Split { axis, children } => {
+            let first_child = packed.regions.len() as u64;
+            for child in children {
+                let child_index = packed.regions.len() as u64;
+                packed.region_children.push(child_index);
+                flatten_region(child, node_index, packed);
+            }
+            debug_assert_eq!(first_child, packed.region_children[child_offset]);
+            let axis_flag = match axis {
+                CutAxis::Horizontal => LITEPARSE_PROJECTED_REGION_FLAG_HORIZONTAL,
+                CutAxis::Vertical => LITEPARSE_PROJECTED_REGION_FLAG_VERTICAL,
+            };
+            (
+                LITEPARSE_PROJECTED_REGION_FLAG_SPLIT | axis_flag,
+                children.len(),
+            )
+        }
+    };
+    let node = &mut packed.regions[node_index as usize];
+    node.child_offset = packed_len(child_offset);
+    node.child_count = packed_len(child_count);
+    node.item_offset = packed_len(item_offset);
+    node.item_count = packed_len(packed.region_items.len() - item_offset);
+    node.flags = flags;
+}
+
+pub fn projected_layout_abi() -> LiteParseProjectedLayoutAbi {
+    use std::mem::{align_of, offset_of, size_of};
+    LiteParseProjectedLayoutAbi {
+        version: LITEPARSE_PROJECTED_LAYOUT_ABI_VERSION,
+        layout_bytes_size: size_of::<LiteParseLayoutBytes>() as u32,
+        layout_bytes_align: align_of::<LiteParseLayoutBytes>() as u32,
+        projected_page_size: size_of::<LiteParseProjectedLayoutPage>() as u32,
+        projected_page_align: align_of::<LiteParseProjectedLayoutPage>() as u32,
+        projected_line_size: size_of::<LiteParseProjectedLine>() as u32,
+        projected_line_align: align_of::<LiteParseProjectedLine>() as u32,
+        projected_span_size: size_of::<LiteParseProjectedSpan>() as u32,
+        projected_span_align: align_of::<LiteParseProjectedSpan>() as u32,
+        projected_word_size: size_of::<LiteParseProjectedWord>() as u32,
+        projected_word_align: align_of::<LiteParseProjectedWord>() as u32,
+        projected_region_size: size_of::<LiteParseProjectedRegion>() as u32,
+        projected_region_align: align_of::<LiteParseProjectedRegion>() as u32,
+        line_span_offset: offset_of!(LiteParseProjectedLine, span_offset) as u32,
+        line_region_path_offset: offset_of!(LiteParseProjectedLine, region_path_offset) as u32,
+        span_char_code_offset: offset_of!(LiteParseProjectedSpan, char_code_offset) as u32,
+        span_word_offset: offset_of!(LiteParseProjectedSpan, word_offset) as u32,
+        page_region_offset: offset_of!(LiteParseProjectedLayoutPage, region_offset) as u32,
+        region_child_offset: offset_of!(LiteParseProjectedRegion, child_offset) as u32,
+        layout_bytes_len_offset: offset_of!(LiteParseLayoutBytes, len) as u32,
+    }
+}
+
 impl LiteParseTextItem {
     pub(crate) fn borrow(item: &TextItem, metadata_enabled: bool) -> Self {
         let metadata = item.text_metadata(metadata_enabled);
@@ -869,7 +1454,9 @@ impl LiteParsePageGeometry {
             view_box.right,
             view_box.top,
             page.user_unit(),
-            u8::try_from(page.rotation()).ok().filter(|turns| *turns < 4),
+            u8::try_from(page.rotation())
+                .ok()
+                .filter(|turns| *turns < 4),
         )
     }
 }

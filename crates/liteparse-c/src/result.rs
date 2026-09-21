@@ -17,12 +17,15 @@ use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 use crate::views::{
     BlocksPacked, LITEPARSE_FORM_TYPE_NONE, LiteParseAnnotation, LiteParseDocumentMeta,
     LiteParseDocumentMetaValue, LiteParseFormField, LiteParseFormTypeValue, LiteParseImage,
-    LiteParseLayoutBlock, LiteParseLayoutCell, LiteParseLayoutRow, LiteParseOutlineEntry,
-    LiteParsePageComplexity, LiteParsePageComplexityValue, LiteParsePageError,
-    LiteParsePageGeometryValue, LiteParsePageSize, LiteParseRect, LiteParseRectValue,
-    LiteParseScreenshot, LiteParseScreenshotRect, LiteParseStructureAttribute,
+    LiteParseImageRef, LiteParseLayoutBlock, LiteParseLayoutCell, LiteParseLayoutRow,
+    LiteParseOutlineEntry, LiteParsePageComplexity, LiteParsePageComplexityValue,
+    LiteParsePageError, LiteParsePageGeometryValue, LiteParsePageSize, LiteParseProjectedLayoutAbi,
+    LiteParseProjectedLayoutPage, LiteParseProjectedLayoutSnapshot, LiteParseProjectedLine,
+    LiteParseProjectedRegion, LiteParseProjectedSpan, LiteParseProjectedWord, LiteParseRect,
+    LiteParseRectValue, LiteParseScreenshot, LiteParseScreenshotRect, LiteParseStructureAttribute,
     LiteParseStructureNode, LiteParseTextItem, LiteParseVectorLine, LiteParseVectorShape,
-    LiteParseImageRef, LiteParseWordBox, LiteParseXfaPacket, StructurePacked, VectorsPacked, views,
+    LiteParseWordBox, LiteParseXfaPacket, ProjectedLayoutPacked, StructurePacked, VectorsPacked,
+    projected_layout_abi, views,
 };
 
 pub struct LiteParseResult {
@@ -155,6 +158,7 @@ pub(crate) struct ResultState {
     items: OnceLock<Vec<Vec<LiteParseTextItem>>>,
     words: OnceLock<Vec<Vec<Vec<LiteParseWordBox>>>>,
     extras: OnceLock<PackedExtras>,
+    projected_layout: OnceLock<ProjectedLayoutPacked>,
 }
 
 impl ResultState {
@@ -175,6 +179,7 @@ impl ResultState {
             items: OnceLock::new(),
             words: OnceLock::new(),
             extras: OnceLock::new(),
+            projected_layout: OnceLock::new(),
         }
     }
 
@@ -233,6 +238,12 @@ impl ResultState {
     fn extras(&self) -> &PackedExtras {
         self.extras
             .get_or_init(|| PackedExtras::pack(&self.result, self.requested_dpi))
+    }
+
+    fn projected_layout(&self) -> &ProjectedLayoutPacked {
+        self.projected_layout.get_or_init(|| {
+            ProjectedLayoutPacked::pack(&self.result.pages, self.extract_text_metadata)
+        })
     }
 }
 
@@ -1002,6 +1013,149 @@ pub unsafe extern "C" fn liteparse_result_block_lines(
     unsafe {
         slice_out(out_len, || {
             Ok(blocks(state_ref(result)?, page_index).map(|packed| packed.lines.as_slice()))
+        })
+    }
+}
+
+/// Return the C layout facts for the projected-layout snapshot records.
+#[unsafe(no_mangle)]
+pub extern "C" fn liteparse_projected_layout_abi() -> LiteParseProjectedLayoutAbi {
+    projected_layout_abi()
+}
+
+/// Borrow the projected-layout snapshot descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_snapshot(
+    result: *const LiteParseResult,
+) -> LiteParseProjectedLayoutSnapshot {
+    unsafe { state_ref(result) }
+        .map(|state| state.projected_layout().snapshot)
+        .unwrap_or_default()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_pages(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const LiteParseProjectedLayoutPage {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(state_ref(result)?.projected_layout().pages.as_slice()))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_lines(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const LiteParseProjectedLine {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(state_ref(result)?.projected_layout().lines.as_slice()))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_spans(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const LiteParseProjectedSpan {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(state_ref(result)?.projected_layout().spans.as_slice()))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_words(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const LiteParseProjectedWord {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(state_ref(result)?.projected_layout().words.as_slice()))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_regions(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const LiteParseProjectedRegion {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(
+                state_ref(result)?.projected_layout().regions.as_slice(),
+            ))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_region_paths(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const u16 {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(
+                state_ref(result)?
+                    .projected_layout()
+                    .region_paths
+                    .as_slice(),
+            ))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_region_items(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const u64 {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(
+                state_ref(result)?
+                    .projected_layout()
+                    .region_items
+                    .as_slice(),
+            ))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_region_children(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const u64 {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(
+                state_ref(result)?
+                    .projected_layout()
+                    .region_children
+                    .as_slice(),
+            ))
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_result_projected_layout_char_codes(
+    result: *const LiteParseResult,
+    out_len: *mut usize,
+) -> *const u32 {
+    unsafe {
+        slice_out(out_len, || {
+            Ok(Some(
+                state_ref(result)?.projected_layout().char_codes.as_slice(),
+            ))
         })
     }
 }
