@@ -211,9 +211,7 @@ impl DocumentState {
         result: &ParseResult,
     ) -> Vec<crate::views::LiteParsePageGeometryValue> {
         let lib = Library::init();
-        let Ok(document) =
-            load_document(&lib, &self.input, self.config.password.as_deref())
-        else {
+        let Ok(document) = load_document(&lib, &self.input, self.config.password.as_deref()) else {
             return vec![crate::views::LiteParsePageGeometryValue::default(); result.pages.len()];
         };
         if liteparse::extract::apply_page_orientation_corrections(

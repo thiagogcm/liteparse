@@ -4,11 +4,11 @@ use liteparse_pdfium::{Library, RectF};
 
 use crate::document::DocumentState;
 use crate::handle::{
-    bytes_view, free_handle, opaque_handles, optional_str_view, slice_out, state_ref,
-    LiteParseByteView,
+    LiteParseByteView, bytes_view, free_handle, opaque_handles, optional_str_view, slice_out,
+    state_ref,
 };
 use crate::render::load_document;
-use crate::status::{FfiResult, LiteParseStatus, LITEPARSE_STATUS_PARSE_ERROR};
+use crate::status::{FfiResult, LITEPARSE_STATUS_PARSE_ERROR, LiteParseStatus};
 use crate::views::{LiteParsePageGeometry, LiteParseRect, LiteParseRectValue};
 
 /// A document's heuristic-free text runs. Views borrow from this handle.
@@ -231,7 +231,10 @@ pub(crate) fn extract_raw_text(
 ) -> FfiResult<RawTextState> {
     let lib = Library::init();
     let document = load_document(&lib, &state.input, state.config.password.as_deref())?;
-    liteparse::extract::apply_page_orientation_corrections(&document, &state.config.page_orientation_corrections)?;
+    liteparse::extract::apply_page_orientation_corrections(
+        &document,
+        &state.config.page_orientation_corrections,
+    )?;
     let page_count = document.page_count().max(0) as u32;
     let mut pages = match pages {
         Some(pages) => pages,

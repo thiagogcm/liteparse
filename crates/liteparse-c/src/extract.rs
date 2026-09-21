@@ -368,11 +368,7 @@ pub unsafe extern "C" fn liteparse_extract_pages(
     extract: *const LiteParseExtract,
     out_len: *mut usize,
 ) -> *const LiteParseContentPage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(extract)?.pages.as_slice()))
-        })
-    }
+    unsafe { slice_out(out_len, || Ok(Some(state_ref(extract)?.pages.as_slice()))) }
 }
 
 /// Borrow the flattened pre-projection text items.
@@ -385,11 +381,7 @@ pub unsafe extern "C" fn liteparse_extract_items(
     extract: *const LiteParseExtract,
     out_len: *mut usize,
 ) -> *const LiteParseTextItem {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(extract)?.items.as_slice()))
-        })
-    }
+    unsafe { slice_out(out_len, || Ok(Some(state_ref(extract)?.items.as_slice()))) }
 }
 
 /// Borrow the flattened structure-tree nodes used for heading detection.
@@ -506,11 +498,7 @@ pub unsafe extern "C" fn liteparse_extract_images(
     extract: *const LiteParseExtract,
     out_len: *mut usize,
 ) -> *const LiteParseImage {
-    unsafe {
-        slice_out(out_len, || {
-            Ok(Some(state_ref(extract)?.images.as_slice()))
-        })
-    }
+    unsafe { slice_out(out_len, || Ok(Some(state_ref(extract)?.images.as_slice()))) }
 }
 
 /// Return the count of image extraction failures.
@@ -763,7 +751,8 @@ pub unsafe extern "C" fn liteparse_extract_structure_attributes(
 ) -> *const LiteParseStructureAttribute {
     unsafe {
         slice_out(out_len, || {
-            Ok(structure(state_ref(extract)?, page_index).map(|packed| packed.attributes.as_slice()))
+            Ok(structure(state_ref(extract)?, page_index)
+                .map(|packed| packed.attributes.as_slice()))
         })
     }
 }
@@ -781,10 +770,8 @@ pub unsafe extern "C" fn liteparse_extract_structure_annotations(
 ) -> *const LiteParseAnnotation {
     unsafe {
         slice_out(out_len, || {
-            Ok(
-                structure(state_ref(extract)?, page_index)
-                    .map(|packed| packed.annotations.as_slice()),
-            )
+            Ok(structure(state_ref(extract)?, page_index)
+                .map(|packed| packed.annotations.as_slice()))
         })
     }
 }

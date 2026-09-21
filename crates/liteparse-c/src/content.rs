@@ -198,10 +198,7 @@ pub unsafe extern "C" fn liteparse_parser_parse_content(
                 core.parse_from_pages(pages, owned.outline)
             };
         let geometries =
-            vec![
-                crate::views::LiteParsePageGeometryValue::default();
-                result.pages.len()
-            ];
+            vec![crate::views::LiteParsePageGeometryValue::default(); result.pages.len()];
         Ok(ResultState::new(
             result,
             parser.config().extract_text_metadata,
@@ -245,9 +242,8 @@ unsafe fn owned_content(raw: *const LiteParseContent) -> FfiResult<OwnedContent>
     let outline_in =
         unsafe { as_slice(raw.outline, raw.outline_len, "outline") }?.unwrap_or_default();
     let words = unsafe { as_slice(raw.words, raw.words_len, "words") }?.unwrap_or_default();
-    let struct_nodes =
-        unsafe { as_slice(raw.struct_nodes, raw.struct_nodes_len, "struct_nodes") }?
-            .unwrap_or_default();
+    let struct_nodes = unsafe { as_slice(raw.struct_nodes, raw.struct_nodes_len, "struct_nodes") }?
+        .unwrap_or_default();
     let image_refs =
         unsafe { as_slice(raw.image_refs, raw.image_refs_len, "image_refs") }?.unwrap_or_default();
 
@@ -256,7 +252,15 @@ unsafe fn owned_content(raw: *const LiteParseContent) -> FfiResult<OwnedContent>
     let mut any_page_blocks = false;
     for (index, page) in pages.iter().enumerate() {
         owned_pages.push(unsafe {
-            copy_page(page, index, items, graphics, words, struct_nodes, image_refs)
+            copy_page(
+                page,
+                index,
+                items,
+                graphics,
+                words,
+                struct_nodes,
+                image_refs,
+            )
         }?);
         let copied = copy_blocks(
             blocks,
@@ -456,8 +460,10 @@ fn copy_words(
             )));
         }
         copied.push(WordBox {
-            text: unsafe { optional_view_str(word.text, &format!("{where_}.words[{word_index}].text")) }?
-                .unwrap_or_default(),
+            text: unsafe {
+                optional_view_str(word.text, &format!("{where_}.words[{word_index}].text"))
+            }?
+            .unwrap_or_default(),
             x: word.x,
             y: word.y,
             width: word.width,
@@ -486,7 +492,8 @@ unsafe fn copy_struct_node(
         .unwrap_or_default()
         .to_vec();
     Ok(StructNode {
-        role: unsafe { optional_view_str(node.role, &format!("{where_}.role")) }?.unwrap_or_default(),
+        role: unsafe { optional_view_str(node.role, &format!("{where_}.role")) }?
+            .unwrap_or_default(),
         mcids,
         bbox: node.has_bbox.then(|| Rect::from(&node.bbox)),
         alt_text: unsafe { optional_view_str(node.alt_text, &format!("{where_}.alt_text")) }?,
@@ -499,9 +506,15 @@ unsafe fn copy_image_ref(
     ref_index: usize,
 ) -> FfiResult<ImageRef> {
     let where_ = format!("pages[{page_index}].image_refs[{ref_index}]");
-    if ![image.bbox.x, image.bbox.y, image.bbox.width, image.bbox.height, image.rotation]
-        .iter()
-        .all(|v| v.is_finite())
+    if ![
+        image.bbox.x,
+        image.bbox.y,
+        image.bbox.width,
+        image.bbox.height,
+        image.rotation,
+    ]
+    .iter()
+    .all(|v| v.is_finite())
     {
         return Err(FfiError::invalid_argument(format!(
             "{where_} geometry must be finite"

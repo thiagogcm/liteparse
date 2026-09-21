@@ -496,7 +496,10 @@ pub(crate) fn extract_page_objects(
 
     let lib = Library::init();
     let document = load_document(&lib, &state.input, state.config.password.as_deref())?;
-    liteparse::extract::apply_page_orientation_corrections(&document, &state.config.page_orientation_corrections)?;
+    liteparse::extract::apply_page_orientation_corrections(
+        &document,
+        &state.config.page_orientation_corrections,
+    )?;
     let page_count = document.page_count().max(0) as u32;
     let mut pages = match pages {
         Some(pages) => pages,

@@ -331,10 +331,12 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
                 correction.page, correction.angle,
             )));
         }
-        config.page_orientation_corrections.push(PageOrientationCorrection {
-            page: correction.page,
-            angle: correction.angle,
-        });
+        config
+            .page_orientation_corrections
+            .push(PageOrientationCorrection {
+                page: correction.page,
+                angle: correction.angle,
+            });
     }
 
     if config.image_output_dir.is_some() && !config.effective_extract_images() {
