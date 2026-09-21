@@ -756,6 +756,32 @@ fn packed_len(value: usize) -> u64 {
     u64::try_from(value).expect("layout array length does not fit u64")
 }
 
+fn flag_bits(bits: &[(bool, u32)]) -> u32 {
+    bits.iter()
+        .filter(|(set, _)| *set)
+        .fold(0, |flags, (_, bit)| flags | bit)
+}
+
+fn layout_flags(
+    metadata_enabled: bool,
+    has_words: bool,
+    has_char_codes: bool,
+    has_regions: bool,
+) -> u32 {
+    LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE
+        | LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE
+        | LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES
+        | flag_bits(&[
+            (
+                metadata_enabled,
+                LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA,
+            ),
+            (has_words, LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS),
+            (has_char_codes, LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES),
+            (has_regions, LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE),
+        ])
+}
+
 fn anchor_value(anchor: &liteparse::types::Anchor) -> u32 {
     match anchor {
         liteparse::types::Anchor::Left => LITEPARSE_PROJECTED_ANCHOR_LEFT,
@@ -780,12 +806,14 @@ pub(crate) struct ProjectedLayoutPacked {
 
 impl ProjectedLayoutPacked {
     pub(crate) fn pack(pages: &[liteparse::ParsedPage], metadata_enabled: bool) -> Self {
+        let all_lines = || pages.iter().flat_map(|page| &page.projected_lines);
+        let all_spans = || all_lines().flat_map(|line| &line.spans);
         let mut packed = Self {
             snapshot: LiteParseProjectedLayoutSnapshot::default(),
             pages: Vec::with_capacity(pages.len()),
-            lines: Vec::new(),
-            spans: Vec::new(),
-            words: Vec::new(),
+            lines: Vec::with_capacity(all_lines().count()),
+            spans: Vec::with_capacity(all_spans().count()),
+            words: Vec::with_capacity(all_spans().map(|span| span.words.len()).sum()),
             char_codes: Vec::new(),
             region_paths: Vec::new(),
             regions: Vec::new(),
@@ -828,7 +856,6 @@ impl ProjectedLayoutPacked {
                         packed.char_codes.extend_from_slice(char_codes);
                     }
 
-                    let mut flags = 0;
                     let (font_size, has_font_size) = optional(span.font_size);
                     let (confidence, has_confidence) = optional(span.confidence);
                     let (font_flags, has_font_flags) = optional(span.font_flags);
@@ -837,68 +864,65 @@ impl ProjectedLayoutPacked {
                     let (font_descent, has_font_descent) = optional(metadata.font_descent);
                     let (font_weight, has_font_weight) = optional(metadata.font_weight);
                     let (text_width, has_text_width) = optional(metadata.text_width);
-                    let (font_is_buggy, has_font_is_buggy) = optional(metadata.font_is_buggy);
                     let (mcid, has_mcid) = optional(metadata.mcid);
-                    let (trailing_space_generated, has_trailing_space_generated) =
-                        optional(metadata.trailing_space_generated);
 
-                    if has_font_size {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE;
-                    }
-                    if has_confidence {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE;
-                    }
-                    if span.strike {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE;
-                    }
-                    if span.has_unicode_map_error {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR;
-                    }
-                    if has_font_flags {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS;
-                    }
-                    if has_font_height {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT;
-                    }
-                    if has_font_ascent {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT;
-                    }
-                    if has_font_descent {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT;
-                    }
-                    if has_font_weight {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT;
-                    }
-                    if has_text_width {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH;
-                    }
-                    if has_font_is_buggy && font_is_buggy {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY;
-                    }
-                    if has_mcid {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID;
-                    }
-                    if has_trailing_space_generated && trailing_space_generated {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED;
-                    }
-                    if packed.char_codes.len() > span_char_code_offset {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES;
-                    }
-                    if packed.words.len() > span_word_offset {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS;
-                    }
-                    if span.font_name.is_some() {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME;
-                    }
-                    if span.link.is_some() {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK;
-                    }
-                    if metadata.fill_color.is_some() {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR;
-                    }
-                    if metadata.stroke_color.is_some() {
-                        flags |= LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR;
-                    }
+                    let flags = flag_bits(&[
+                        (has_font_size, LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_SIZE),
+                        (has_confidence, LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CONFIDENCE),
+                        (span.strike, LITEPARSE_PROJECTED_SPAN_FLAG_STRIKE),
+                        (
+                            span.has_unicode_map_error,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_UNICODE_MAP_ERROR,
+                        ),
+                        (has_font_flags, LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_FLAGS),
+                        (
+                            has_font_height,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_HEIGHT,
+                        ),
+                        (
+                            has_font_ascent,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_ASCENT,
+                        ),
+                        (
+                            has_font_descent,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_DESCENT,
+                        ),
+                        (
+                            has_font_weight,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_WEIGHT,
+                        ),
+                        (has_text_width, LITEPARSE_PROJECTED_SPAN_FLAG_HAS_TEXT_WIDTH),
+                        (
+                            metadata.font_is_buggy == Some(true),
+                            LITEPARSE_PROJECTED_SPAN_FLAG_FONT_IS_BUGGY,
+                        ),
+                        (has_mcid, LITEPARSE_PROJECTED_SPAN_FLAG_HAS_MCID),
+                        (
+                            metadata.trailing_space_generated == Some(true),
+                            LITEPARSE_PROJECTED_SPAN_FLAG_TRAILING_SPACE_GENERATED,
+                        ),
+                        (
+                            packed.char_codes.len() > span_char_code_offset,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_CHAR_CODES,
+                        ),
+                        (
+                            packed.words.len() > span_word_offset,
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_WORDS,
+                        ),
+                        (
+                            span.font_name.is_some(),
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FONT_NAME,
+                        ),
+                        (span.link.is_some(), LITEPARSE_PROJECTED_SPAN_FLAG_HAS_LINK),
+                        (
+                            metadata.fill_color.is_some(),
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_FILL_COLOR,
+                        ),
+                        (
+                            metadata.stroke_color.is_some(),
+                            LITEPARSE_PROJECTED_SPAN_FLAG_HAS_STROKE_COLOR,
+                        ),
+                    ]);
 
                     packed.spans.push(LiteParseProjectedSpan {
                         text: fixed_bytes(span.text.as_bytes()),
@@ -932,37 +956,29 @@ impl ProjectedLayoutPacked {
 
                 let line_region_path_offset = packed.region_paths.len();
                 packed.region_paths.extend_from_slice(&line.region_path);
-                let mut flags = 0;
-                if line.heading_font_size.is_some() {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE;
-                }
-                if line.dominant_font_name.is_some() {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME;
-                }
-                if line.mcid.is_some() {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID;
-                }
-                if line.all_bold {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD;
-                }
-                if line.all_italic {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC;
-                }
-                if line.all_mono {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO;
-                }
-                if line.all_strike {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE;
-                }
-                if line.font_size_is_estimated {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED;
-                }
-                if line.rtl {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_RTL;
-                }
-                if line.in_figure {
-                    flags |= LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE;
-                }
+                let (heading_font_size, has_heading_font_size) = optional(line.heading_font_size);
+                let (mcid, has_mcid) = optional(line.mcid);
+                let flags = flag_bits(&[
+                    (
+                        has_heading_font_size,
+                        LITEPARSE_PROJECTED_LINE_FLAG_HAS_HEADING_FONT_SIZE,
+                    ),
+                    (
+                        line.dominant_font_name.is_some(),
+                        LITEPARSE_PROJECTED_LINE_FLAG_HAS_DOMINANT_FONT_NAME,
+                    ),
+                    (has_mcid, LITEPARSE_PROJECTED_LINE_FLAG_HAS_MCID),
+                    (line.all_bold, LITEPARSE_PROJECTED_LINE_FLAG_ALL_BOLD),
+                    (line.all_italic, LITEPARSE_PROJECTED_LINE_FLAG_ALL_ITALIC),
+                    (line.all_mono, LITEPARSE_PROJECTED_LINE_FLAG_ALL_MONO),
+                    (line.all_strike, LITEPARSE_PROJECTED_LINE_FLAG_ALL_STRIKE),
+                    (
+                        line.font_size_is_estimated,
+                        LITEPARSE_PROJECTED_LINE_FLAG_FONT_SIZE_ESTIMATED,
+                    ),
+                    (line.rtl, LITEPARSE_PROJECTED_LINE_FLAG_RTL),
+                    (line.in_figure, LITEPARSE_PROJECTED_LINE_FLAG_IN_FIGURE),
+                ]);
 
                 packed.lines.push(LiteParseProjectedLine {
                     text: fixed_bytes(line.text.as_bytes()),
@@ -970,8 +986,8 @@ impl ProjectedLayoutPacked {
                     bbox: LiteParseRect::from(&line.bbox),
                     indent_x: line.indent_x,
                     dominant_font_size: line.dominant_font_size,
-                    heading_font_size: line.heading_font_size.unwrap_or_default(),
-                    mcid: line.mcid.unwrap_or_default(),
+                    heading_font_size,
+                    mcid,
                     anchor: anchor_value(&line.anchor),
                     flags,
                     span_offset: packed_len(line_span_offset),
@@ -981,21 +997,12 @@ impl ProjectedLayoutPacked {
                 });
             }
 
-            let mut flags = LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE
-                | LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE
-                | LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES;
-            if metadata_enabled {
-                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA;
-            }
-            if packed.words.len() > word_offset {
-                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS;
-            }
-            if packed.char_codes.len() > char_code_offset {
-                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES;
-            }
-            if packed.regions.len() > region_offset {
-                flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE;
-            }
+            let flags = layout_flags(
+                metadata_enabled,
+                packed.words.len() > word_offset,
+                packed.char_codes.len() > char_code_offset,
+                packed.regions.len() > region_offset,
+            );
             packed.pages.push(LiteParseProjectedLayoutPage {
                 page_number: u32::try_from(page.page_number).expect("page number does not fit u32"),
                 coordinate_space: LITEPARSE_PROJECTED_LAYOUT_COORDINATES,
@@ -1021,21 +1028,12 @@ impl ProjectedLayoutPacked {
             });
         }
 
-        let mut flags = LITEPARSE_PROJECTED_LAYOUT_FLAG_SOURCE_PROVENANCE_UNAVAILABLE
-            | LITEPARSE_PROJECTED_LAYOUT_FLAG_BLOCK_ASSOCIATIONS_UNAVAILABLE
-            | LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS_SOURCE_COORDINATES;
-        if metadata_enabled {
-            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_RICH_METADATA;
-        }
-        if !packed.words.is_empty() {
-            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_WORDS;
-        }
-        if !packed.char_codes.is_empty() {
-            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_CHAR_CODES;
-        }
-        if !packed.regions.is_empty() {
-            flags |= LITEPARSE_PROJECTED_LAYOUT_FLAG_REGION_TREE;
-        }
+        let flags = layout_flags(
+            metadata_enabled,
+            !packed.words.is_empty(),
+            !packed.char_codes.is_empty(),
+            !packed.regions.is_empty(),
+        );
         packed.snapshot = LiteParseProjectedLayoutSnapshot {
             version: LITEPARSE_PROJECTED_LAYOUT_SNAPSHOT_VERSION,
             coordinate_space: LITEPARSE_PROJECTED_LAYOUT_COORDINATES,
@@ -1055,7 +1053,7 @@ impl ProjectedLayoutPacked {
     }
 }
 
-fn flatten_region(region: &Region, parent_index: u64, packed: &mut ProjectedLayoutPacked) {
+fn flatten_region(region: &Region, parent_index: u64, packed: &mut ProjectedLayoutPacked) -> u64 {
     let node_index = packed.regions.len() as u64;
     packed.regions.push(LiteParseProjectedRegion {
         bbox: LiteParseRect::from(&region.bbox),
@@ -1063,38 +1061,39 @@ fn flatten_region(region: &Region, parent_index: u64, packed: &mut ProjectedLayo
         ..Default::default()
     });
     let item_offset = packed.region_items.len();
-    let child_offset = packed.region_children.len();
-    let (flags, child_count) = match &region.kind {
+    let (flags, child_indices) = match &region.kind {
         RegionKind::Leaf { item_indices } => {
             packed
                 .region_items
                 .extend(item_indices.iter().map(|index| *index as u64));
-            (LITEPARSE_PROJECTED_REGION_FLAG_LEAF, 0)
+            (LITEPARSE_PROJECTED_REGION_FLAG_LEAF, Vec::new())
         }
         RegionKind::Split { axis, children } => {
-            let first_child = packed.regions.len() as u64;
-            for child in children {
-                let child_index = packed.regions.len() as u64;
-                packed.region_children.push(child_index);
-                flatten_region(child, node_index, packed);
-            }
-            debug_assert_eq!(first_child, packed.region_children[child_offset]);
+            let child_indices: Vec<u64> = children
+                .iter()
+                .map(|child| flatten_region(child, node_index, packed))
+                .collect();
             let axis_flag = match axis {
                 CutAxis::Horizontal => LITEPARSE_PROJECTED_REGION_FLAG_HORIZONTAL,
                 CutAxis::Vertical => LITEPARSE_PROJECTED_REGION_FLAG_VERTICAL,
             };
             (
                 LITEPARSE_PROJECTED_REGION_FLAG_SPLIT | axis_flag,
-                children.len(),
+                child_indices,
             )
         }
     };
+    // Appended after the recursion so a node's children stay contiguous even
+    // when its descendants are split nodes that append their own children.
+    let child_offset = packed.region_children.len();
+    packed.region_children.extend_from_slice(&child_indices);
     let node = &mut packed.regions[node_index as usize];
     node.child_offset = packed_len(child_offset);
-    node.child_count = packed_len(child_count);
+    node.child_count = packed_len(child_indices.len());
     node.item_offset = packed_len(item_offset);
     node.item_count = packed_len(packed.region_items.len() - item_offset);
     node.flags = flags;
+    node_index
 }
 
 pub fn projected_layout_abi() -> LiteParseProjectedLayoutAbi {
@@ -1745,6 +1744,62 @@ impl VectorsPacked {
                     }
                 })
                 .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }
+    }
+
+    fn leaf(items: Vec<usize>) -> Region {
+        Region {
+            bbox: rect(),
+            kind: RegionKind::Leaf {
+                item_indices: items,
+            },
+        }
+    }
+
+    fn split(children: Vec<Region>) -> Region {
+        Region {
+            bbox: rect(),
+            kind: RegionKind::Split {
+                axis: CutAxis::Vertical,
+                children,
+            },
+        }
+    }
+
+    #[test]
+    fn nested_region_children_are_contiguous() {
+        // root -> [a -> [a1, a2], b]
+        let tree = split(vec![
+            split(vec![leaf(vec![0]), leaf(vec![1])]),
+            leaf(vec![2]),
+        ]);
+        let mut packed = ProjectedLayoutPacked::pack(&[], false);
+        flatten_region(&tree, LITEPARSE_PROJECTED_REGION_NO_PARENT, &mut packed);
+
+        let children = |node: usize| {
+            let region = &packed.regions[node];
+            let start = region.child_offset as usize;
+            packed.region_children[start..start + region.child_count as usize].to_vec()
+        };
+        assert_eq!(children(0), [1, 4]);
+        assert_eq!(children(1), [2, 3]);
+        assert!(children(2).is_empty());
+        for (index, region) in packed.regions.iter().enumerate().skip(1) {
+            assert!(children(region.parent_index as usize).contains(&(index as u64)));
         }
     }
 }
