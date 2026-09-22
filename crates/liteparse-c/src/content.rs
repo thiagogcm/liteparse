@@ -8,9 +8,7 @@ use liteparse::types::{
     VectorGraphics, WordBox,
 };
 
-use crate::handle::{
-    LiteParseByteView, as_slice, create_handle, optional_view_str, state_ref, sub, view_bytes,
-};
+use crate::handle::{LiteParseStr, as_slice, create_handle, pool_str, state_ref, sub, view_bytes};
 use crate::parser::{LiteParseParser, build_parser};
 use crate::records::*;
 use crate::result::{LiteParseResult, ResultState};
@@ -19,7 +17,8 @@ use crate::status::{FfiError, FfiResult, LiteParseStatus};
 /// Packed page content. Read from a result view, or filled by the caller for
 /// `liteparse_parser_parse_content`.
 ///
-/// Pages carry offset/count ranges into the flat arrays. `strings` holds
+/// Pages carry offset/count ranges into the flat arrays. `pool` is the UTF-8
+/// string pool every `LiteParseStr` in the content indexes; `strings` holds
 /// form-field options and block source lines; `annotations` holds page and
 /// structure-node annotations; `mcids` holds struct-node and structure-tree
 /// marked-content ids; `words` and `char_codes` are shared by every text
@@ -30,6 +29,10 @@ use crate::status::{FfiError, FfiResult, LiteParseStatus};
 pub struct LiteParseContent {
     /// Must equal `sizeof(LiteParseContent)` on input.
     pub size_of_content: usize,
+    /// String pool. On output it starts with a NUL byte and every string is
+    /// NUL-terminated; on input only the `LiteParseStr` ranges matter.
+    pub pool: *const u8,
+    pub pool_len: usize,
     pub pages: *const LiteParsePage,
     pub pages_len: usize,
     pub items: *const LiteParseTextItem,
@@ -54,7 +57,7 @@ pub struct LiteParseContent {
     pub quadpoints_len: usize,
     pub form_fields: *const LiteParseFormField,
     pub form_fields_len: usize,
-    pub strings: *const LiteParseByteView,
+    pub strings: *const LiteParseStr,
     pub strings_len: usize,
     pub structure_nodes: *const LiteParseStructureNode,
     pub structure_nodes_len: usize,
@@ -161,6 +164,7 @@ struct OwnedContent {
 
 /// Borrowed input arrays, validated once.
 struct Arrays<'a> {
+    pool: &'a [u8],
     items: &'a [LiteParseTextItem],
     words: &'a [LiteParseWordBox],
     char_codes: &'a [u32],
@@ -171,7 +175,7 @@ struct Arrays<'a> {
     annotations: &'a [LiteParseAnnotation],
     quadpoints: &'a [LiteParseRect],
     form_fields: &'a [LiteParseFormField],
-    strings: &'a [LiteParseByteView],
+    strings: &'a [LiteParseStr],
     structure_nodes: &'a [LiteParseStructureNode],
     structure_attributes: &'a [LiteParseStructureAttribute],
     blocks: &'a [LiteParseLayoutBlock],
@@ -189,6 +193,7 @@ impl<'a> Arrays<'a> {
             };
         }
         Ok(Self {
+            pool: field!(pool, pool_len),
             items: field!(items, items_len),
             words: field!(words, words_len),
             char_codes: field!(char_codes, char_codes_len),
@@ -262,7 +267,7 @@ unsafe fn owned_content(raw: *const LiteParseContent) -> FfiResult<OwnedContent>
             level: u8::try_from(entry.level).map_err(|_| {
                 FfiError::invalid_argument(format!("{where_}.level must fit in u8"))
             })?,
-            title: unsafe { str_field(entry.title, &where_, "title") }?.unwrap_or_default(),
+            title: str_field(arrays.pool, entry.title, &where_, "title")?.unwrap_or_default(),
             page_index: entry.page_index,
             y_pdf: has(entry.flags, LITEPARSE_OUTLINE_FLAG_HAS_Y_PDF).then_some(entry.y_pdf),
         });
@@ -270,7 +275,7 @@ unsafe fn owned_content(raw: *const LiteParseContent) -> FfiResult<OwnedContent>
 
     let mut images = Vec::with_capacity(images_in.len());
     for (index, image) in images_in.iter().enumerate() {
-        images.push(unsafe { copy_image(image, &format!("images[{index}]")) }?);
+        images.push(unsafe { copy_image(arrays.pool, image, &format!("images[{index}]")) }?);
     }
 
     Ok(OwnedContent {
@@ -340,12 +345,14 @@ fn flagged_rect(
         .transpose()
 }
 
-unsafe fn str_field(
-    view: LiteParseByteView,
+fn str_field(
+    pool: &[u8],
+    value: LiteParseStr,
     where_: &str,
     field: &str,
 ) -> FfiResult<Option<String>> {
-    unsafe { optional_view_str(view, field) }
+    pool_str(pool, value, field)
+        .map(|value| value.map(str::to_owned))
         .map_err(|error| FfiError::invalid_argument(format!("{where_}.{}", error.message)))
 }
 
@@ -430,7 +437,7 @@ unsafe fn copy_page(page: &LiteParsePage, where_: &str, arrays: &Arrays<'_>) -> 
         let what = format!("{where_}.struct_nodes[{struct_index}]");
         known_flags(node.flags, STRUCT_NODE_FLAGS, &what, "")?;
         copied_structs.push(StructNode {
-            role: unsafe { str_field(node.role, &what, "role") }?.unwrap_or_default(),
+            role: str_field(arrays.pool, node.role, &what, "role")?.unwrap_or_default(),
             mcids: sub(
                 arrays.mcids,
                 node.mcid_offset,
@@ -446,7 +453,7 @@ unsafe fn copy_page(page: &LiteParsePage, where_: &str, arrays: &Arrays<'_>) -> 
                 &what,
                 "bbox",
             )?,
-            alt_text: unsafe { str_field(node.alt_text, &what, "alt_text") }?,
+            alt_text: str_field(arrays.pool, node.alt_text, &what, "alt_text")?,
         });
     }
 
@@ -463,10 +470,10 @@ unsafe fn copy_page(page: &LiteParsePage, where_: &str, arrays: &Arrays<'_>) -> 
         finite_rect(&image.bbox, &what, "bbox")?;
         finite(&[image.rotation], &what, "rotation")?;
         copied_image_refs.push(ImageRef {
-            id: unsafe { str_field(image.id, &what, "id") }?.unwrap_or_default(),
+            id: str_field(arrays.pool, image.id, &what, "id")?.unwrap_or_default(),
             bbox: Rect::from(&image.bbox),
             obj_index: image.obj_index as usize,
-            format: unsafe { str_field(image.format, &what, "format") }?.unwrap_or_default(),
+            format: str_field(arrays.pool, image.format, &what, "format")?.unwrap_or_default(),
             pixel_width: image.pixel_width,
             pixel_height: image.pixel_height,
             rotation: image.rotation,
@@ -521,7 +528,7 @@ unsafe fn copy_page(page: &LiteParsePage, where_: &str, arrays: &Arrays<'_>) -> 
     )?;
     Ok(Page {
         page_number: page.page_number as usize,
-        page_label: unsafe { str_field(page.label, where_, "label") }?,
+        page_label: str_field(arrays.pool, page.label, where_, "label")?,
         page_width: page.width,
         page_height: page.height,
         content_bounds,
@@ -620,7 +627,7 @@ unsafe fn copy_text_item(
     for word in words {
         finite(&[word.x, word.y, word.width, word.height], where_, "words")?;
         copied_words.push(WordBox {
-            text: unsafe { str_field(word.text, where_, "words.text") }?.unwrap_or_default(),
+            text: str_field(arrays.pool, word.text, where_, "words.text")?.unwrap_or_default(),
             x: word.x,
             y: word.y,
             width: word.width,
@@ -628,13 +635,13 @@ unsafe fn copy_text_item(
         });
     }
     Ok(TextItem {
-        text: unsafe { str_field(item.text, where_, "text") }?.unwrap_or_default(),
+        text: str_field(arrays.pool, item.text, where_, "text")?.unwrap_or_default(),
         x: item.x,
         y: item.y,
         width: item.width,
         height: item.height,
         rotation: item.rotation,
-        font_name: unsafe { str_field(item.font_name, where_, "font_name") }?,
+        font_name: str_field(arrays.pool, item.font_name, where_, "font_name")?,
         font_size: flagged(LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_SIZE).then_some(item.font_size),
         font_height: flagged(LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_HEIGHT).then_some(item.font_height),
         font_ascent: flagged(LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_ASCENT).then_some(item.font_ascent),
@@ -653,7 +660,7 @@ unsafe fn copy_text_item(
         char_codes: char_codes.to_vec(),
         trailing_space_generated: flagged(LITEPARSE_TEXT_ITEM_FLAG_TRAILING_SPACE_GENERATED),
         confidence: flagged(LITEPARSE_TEXT_ITEM_FLAG_HAS_CONFIDENCE).then_some(item.confidence),
-        link: unsafe { str_field(item.link, where_, "link") }?,
+        link: str_field(arrays.pool, item.link, where_, "link")?,
         strike: flagged(LITEPARSE_TEXT_ITEM_FLAG_STRIKE),
         words: copied_words,
     })
@@ -731,15 +738,15 @@ unsafe fn copy_annotations(
             finite_rect(quad, &what, "quadpoints")?;
         }
         out.push(DocumentAnnotation {
-            subtype: unsafe { str_field(annotation.subtype, &what, "subtype") }?
+            subtype: str_field(arrays.pool, annotation.subtype, &what, "subtype")?
                 .unwrap_or_default(),
-            contents: unsafe { str_field(annotation.contents, &what, "contents") }?,
-            created: unsafe { str_field(annotation.created, &what, "created") }?,
-            modified: unsafe { str_field(annotation.modified, &what, "modified") }?,
-            title: unsafe { str_field(annotation.title, &what, "title") }?,
+            contents: str_field(arrays.pool, annotation.contents, &what, "contents")?,
+            created: str_field(arrays.pool, annotation.created, &what, "created")?,
+            modified: str_field(arrays.pool, annotation.modified, &what, "modified")?,
+            title: str_field(arrays.pool, annotation.title, &what, "title")?,
             rect,
             quadpoint_rects: quadpoints.iter().map(Rect::from).collect(),
-            uri: unsafe { str_field(annotation.uri, &what, "uri") }?,
+            uri: str_field(arrays.pool, annotation.uri, &what, "uri")?,
         });
     }
     Ok(out)
@@ -755,7 +762,7 @@ unsafe fn copy_strings(
     let strings = sub(arrays.strings, offset, count, where_, field)?;
     let mut out = Vec::with_capacity(strings.len());
     for string in strings {
-        out.push(unsafe { str_field(*string, where_, field) }?.unwrap_or_default());
+        out.push(str_field(arrays.pool, *string, where_, field)?.unwrap_or_default());
     }
     Ok(out)
 }
@@ -773,18 +780,18 @@ unsafe fn copy_form_fields(
         let flags = field.flags;
         known_flags(flags, FORM_FIELD_FLAGS, &what, "")?;
         out.push(FormField {
-            id: unsafe { str_field(field.id, &what, "id") }?.unwrap_or_default(),
-            field_type: unsafe { str_field(field.field_type, &what, "field_type") }?
+            id: str_field(arrays.pool, field.id, &what, "id")?.unwrap_or_default(),
+            field_type: str_field(arrays.pool, field.field_type, &what, "field_type")?
                 .unwrap_or_default(),
             page: field.page,
             annotation_index: field.annotation_index,
             widget_index: field.widget_index,
             object_number: has(flags, LITEPARSE_FORM_FIELD_FLAG_HAS_OBJECT_NUMBER)
                 .then_some(field.object_number),
-            name: unsafe { str_field(field.name, &what, "name") }?,
-            alternate_name: unsafe { str_field(field.alternate_name, &what, "alternate_name") }?,
-            value: unsafe { str_field(field.value, &what, "value") }?,
-            export_value: unsafe { str_field(field.export_value, &what, "export_value") }?,
+            name: str_field(arrays.pool, field.name, &what, "name")?,
+            alternate_name: str_field(arrays.pool, field.alternate_name, &what, "alternate_name")?,
+            value: str_field(arrays.pool, field.value, &what, "value")?,
+            export_value: str_field(arrays.pool, field.export_value, &what, "export_value")?,
             field_flags: field.field_flags,
             control_count: has(flags, LITEPARSE_FORM_FIELD_FLAG_HAS_CONTROL_COUNT)
                 .then_some(field.control_count),
@@ -856,8 +863,8 @@ unsafe fn copy_structure_tree(
         )?;
         let mut attribute_map = BTreeMap::new();
         for attribute in attributes {
-            let name =
-                unsafe { str_field(attribute.name, &what, "attributes.name") }?.unwrap_or_default();
+            let name = str_field(arrays.pool, attribute.name, &what, "attributes.name")?
+                .unwrap_or_default();
             let value = match attribute.kind {
                 LITEPARSE_STRUCTURE_ATTR_BOOL => {
                     StructureAttributeValue::Boolean(attribute.number != 0.0)
@@ -866,7 +873,7 @@ unsafe fn copy_structure_tree(
                     StructureAttributeValue::Number(attribute.number)
                 }
                 LITEPARSE_STRUCTURE_ATTR_STRING => StructureAttributeValue::String(
-                    unsafe { str_field(attribute.string, &what, "attributes.string") }?
+                    str_field(arrays.pool, attribute.string, &what, "attributes.string")?
                         .unwrap_or_default(),
                 ),
                 kind => {
@@ -880,12 +887,12 @@ unsafe fn copy_structure_tree(
         slots.push(Some((
             parent,
             StructureTreeElement {
-                element_type: unsafe { str_field(node.element_type, &what, "element_type") }?
+                element_type: str_field(arrays.pool, node.element_type, &what, "element_type")?
                     .unwrap_or_default(),
-                id: unsafe { str_field(node.id, &what, "id") }?,
-                actual_text: unsafe { str_field(node.actual_text, &what, "actual_text") }?,
-                alt_text: unsafe { str_field(node.alt_text, &what, "alt_text") }?,
-                title: unsafe { str_field(node.title, &what, "title") }?,
+                id: str_field(arrays.pool, node.id, &what, "id")?,
+                actual_text: str_field(arrays.pool, node.actual_text, &what, "actual_text")?,
+                alt_text: str_field(arrays.pool, node.alt_text, &what, "alt_text")?,
+                title: str_field(arrays.pool, node.title, &what, "title")?,
                 attributes: attribute_map,
                 marked_content_ids: sub(
                     arrays.mcids,
@@ -929,20 +936,24 @@ unsafe fn copy_structure_tree(
     Ok(StructureTree { roots })
 }
 
-unsafe fn copy_image(image: &LiteParseImage, where_: &str) -> FfiResult<ExtractedImage> {
+unsafe fn copy_image(
+    pool: &[u8],
+    image: &LiteParseImage,
+    where_: &str,
+) -> FfiResult<ExtractedImage> {
     finite_rect(&image.bbox, where_, "bbox")?;
     finite(&[image.rotation], where_, "rotation")?;
     Ok(ExtractedImage {
-        id: unsafe { str_field(image.id, where_, "id") }?.unwrap_or_default(),
-        name: unsafe { str_field(image.name, where_, "name") }?.unwrap_or_default(),
-        path: unsafe { str_field(image.path, where_, "path") }?,
+        id: str_field(pool, image.id, where_, "id")?.unwrap_or_default(),
+        name: str_field(pool, image.name, where_, "name")?.unwrap_or_default(),
+        path: str_field(pool, image.path, where_, "path")?,
         page: image.page,
         bbox: Rect::from(&image.bbox),
         width: image.width,
         height: image.height,
         rotation: image.rotation,
-        format: unsafe { str_field(image.format, where_, "format") }?.unwrap_or_default(),
-        duplicate_of: unsafe { str_field(image.duplicate_of, where_, "duplicate_of") }?,
+        format: str_field(pool, image.format, where_, "format")?.unwrap_or_default(),
+        duplicate_of: str_field(pool, image.duplicate_of, where_, "duplicate_of")?,
         bytes: std::sync::Arc::new(unsafe { view_bytes(image.bytes, "bytes") }?.to_vec()),
     })
 }
@@ -967,11 +978,11 @@ fn copy_block(
 ) -> FfiResult<PositionedBlock> {
     let flags = block.flags;
     known_flags(flags, BLOCK_FLAGS, what, "")?;
-    let text = unsafe { str_field(block.text, what, "text") }?;
-    let marker = unsafe { str_field(block.marker, what, "marker") }?;
-    let lang = unsafe { str_field(block.lang, what, "lang") }?;
-    let id = unsafe { str_field(block.id, what, "id") }?;
-    let format = unsafe { str_field(block.format, what, "format") }?;
+    let text = str_field(arrays.pool, block.text, what, "text")?;
+    let marker = str_field(arrays.pool, block.marker, what, "marker")?;
+    let lang = str_field(arrays.pool, block.lang, what, "lang")?;
+    let id = str_field(arrays.pool, block.id, what, "id")?;
+    let format = str_field(arrays.pool, block.format, what, "format")?;
     let bbox = flagged_rect(
         flags,
         LITEPARSE_BLOCK_FLAG_HAS_BBOX,
@@ -1108,7 +1119,7 @@ fn copy_cells(
             })
         };
         out.push(OwnedCell {
-            text: unsafe { str_field(cell.text, where_, field) }?.unwrap_or_default(),
+            text: str_field(arrays.pool, cell.text, where_, field)?.unwrap_or_default(),
             bbox: flagged_rect(
                 cell.flags,
                 LITEPARSE_CELL_FLAG_HAS_BBOX,

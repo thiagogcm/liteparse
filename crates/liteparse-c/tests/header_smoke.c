@@ -7,10 +7,7 @@
 
 #include "liteparse.h"
 
-static LiteParseByteView cstr(const char *s) {
-  LiteParseByteView view = {(const uint8_t *)s, strlen(s)};
-  return view;
-}
+#define BYTES(s) ((const uint8_t *)(s)), strlen(s)
 
 static int view_contains(LiteParseByteView view, const char *needle) {
   size_t n = strlen(needle);
@@ -21,11 +18,30 @@ static int view_contains(LiteParseByteView view, const char *needle) {
   return 0;
 }
 
+/* Resolve a pooled string; every output string is NUL-terminated, so the
+ * result is a plain C string. */
+static const char *pooled(const uint8_t *pool, size_t pool_len, LiteParseStr s) {
+  if (pool == NULL || (size_t)s.offset + (size_t)s.len >= pool_len) return NULL;
+  if (pool[(size_t)s.offset + (size_t)s.len] != 0) return NULL;
+  return (const char *)pool + s.offset;
+}
+
 static int fail(const char *what) {
-  LiteParseByteView error = liteparse_last_error();
+  LiteParseByteView error;
+  liteparse_last_error(&error);
   fprintf(stderr, "%s: %.*s\n", what, (int)error.len,
           error.ptr ? (const char *)error.ptr : "");
   return 1;
+}
+
+static int check_str(const uint8_t *pool, size_t pool_len, LiteParseStr s, const char *what) {
+  const char *text = pooled(pool, pool_len, s);
+  if (text == NULL || strlen(text) != s.len) {
+    fprintf(stderr, "%s: string %u+%u is not a NUL-terminated pool entry\n", what, s.offset,
+            s.len);
+    return 1;
+  }
+  return 0;
 }
 
 static int check_range(uint32_t offset, uint32_t count, size_t len, const char *what) {
@@ -129,9 +145,22 @@ static int check_result(const LiteParseResult *result, int expect_text) {
   if (v->content.pages_len == 0) return fail("no pages");
   const LiteParsePage *page = &v->content.pages[0];
   if (page->page_number != 1 || page->width <= 0.0f) return fail("page facts");
-  if ((page->label.ptr == NULL) != (page->label.len == 0)) return fail("page label");
+  const uint8_t *pool = v->content.pool;
+  size_t pool_len = v->content.pool_len;
+  if (pool == NULL || pool_len == 0 || pool[0] != 0) return fail("pool starts with NUL");
+  bad |= check_str(pool, pool_len, page->label, "page label");
+  bad |= check_str(pool, pool_len, v->text, "text");
+  bad |= check_str(pool, pool_len, v->creator, "creator");
+  for (size_t i = 0; i < v->content.items_len; i++) {
+    bad |= check_str(pool, pool_len, v->content.items[i].text, "item text");
+    bad |= check_str(pool, pool_len, v->content.items[i].font_name, "item font");
+  }
+  for (size_t i = 0; i < v->content.strings_len; i++) {
+    bad |= check_str(pool, pool_len, v->content.strings[i], "strings");
+  }
   if (expect_text) {
     if (v->text.len == 0 || page->text.len == 0) return fail("text");
+    if (strlen(pooled(pool, pool_len, v->text)) != v->text.len) return fail("text NUL");
     if (v->flags & LITEPARSE_RESULT_FLAG_EXTRACT_ONLY) return fail("extract flag");
     LiteParseByteView json;
     if (liteparse_result_to_json(result, &json) != LITEPARSE_STATUS_OK) return fail("json");
@@ -173,8 +202,9 @@ static int check_search(const LiteParseResult *result) {
   const LiteParseResultView *v = liteparse_result_view(result);
   if (v->content.items_len == 0) return fail("no items to search");
   LiteParseSearchMatches *matches = NULL;
-  LiteParseStatus status =
-      liteparse_result_search(result, 0, v->content.items[0].text, 0, &matches);
+  LiteParseStr first = v->content.items[0].text;
+  LiteParseStatus status = liteparse_result_search(
+      result, 0, v->content.pool + first.offset, first.len, 0, &matches);
   if (status != LITEPARSE_STATUS_OK) return fail("search");
   const LiteParseSearchView *found = liteparse_search_matches_view(matches);
   int bad = found == NULL || found->items_len == 0;
@@ -182,6 +212,7 @@ static int check_search(const LiteParseResult *result) {
   for (size_t i = 0; !bad && i < found->items_len; i++) {
     bad |= check_range(found->items[i].word_offset, found->items[i].word_count,
                        found->words_len, "match words");
+    bad |= check_str(found->pool, found->pool_len, found->items[i].text, "match text");
   }
   liteparse_search_matches_free(matches);
   return bad;
@@ -270,7 +301,17 @@ static int stage_raw_text(LiteParseDocument *document) {
     return fail("raw text");
   }
   const LiteParseRawTextView *v = liteparse_raw_text_view(raw);
-  int bad = v == NULL || v->pages_len == 0;
+  int str_bad = 0;
+  for (size_t i = 0; v != NULL && i < v->pages_len; i++) {
+    str_bad |= check_str(v->pool, v->pool_len, v->pages[i].label, "raw page label");
+  }
+  for (size_t i = 0; v != NULL && i < v->items_len; i++) {
+    str_bad |= check_str(v->pool, v->pool_len, v->items[i].text, "raw item text");
+  }
+  for (size_t i = 0; v != NULL && i < v->glyph_names_len; i++) {
+    str_bad |= check_str(v->pool, v->pool_len, v->glyph_names[i], "raw glyph name");
+  }
+  int bad = v == NULL || v->pages_len == 0 || str_bad;
   for (size_t i = 0; !bad && i < v->pages_len; i++) {
     bad |= check_range(v->pages[i].item_offset, v->pages[i].item_count, v->items_len, "raw items");
   }
@@ -309,6 +350,9 @@ static int stage_page_objects(LiteParseDocument *document) {
   }
   const LiteParsePageObjectsView *v = liteparse_page_objects_view(objects);
   int bad = v == NULL || v->pages_len == 0;
+  for (size_t i = 0; !bad && i < v->filters_len; i++) {
+    bad |= check_str(v->pool, v->pool_len, v->filters[i], "filter name");
+  }
   for (size_t i = 0; !bad && i < v->pages_len; i++) {
     bad |= check_range(v->pages[i].object_offset, v->pages[i].object_count, v->objects_len,
                        "page objects");
@@ -331,7 +375,7 @@ static int stage_result_screenshots(const char *path) {
   LiteParseDocument *document = NULL;
   LiteParseResult *result = NULL;
   int bad = 0;
-  if (liteparse_document_open_path(parser, cstr(path), &document) != LITEPARSE_STATUS_OK ||
+  if (liteparse_document_open_path(parser, BYTES(path), &document) != LITEPARSE_STATUS_OK ||
       liteparse_document_parse(document, NULL, 0, &result) != LITEPARSE_STATUS_OK) {
     bad = fail("screenshots parse");
   } else {
@@ -350,7 +394,7 @@ static int stage_markdown(const char *path) {
   LiteParseDocument *document = NULL;
   LiteParseResult *result = NULL;
   int bad = 0;
-  if (liteparse_document_open_path(parser, cstr(path), &document) != LITEPARSE_STATUS_OK ||
+  if (liteparse_document_open_path(parser, BYTES(path), &document) != LITEPARSE_STATUS_OK ||
       liteparse_document_parse(document, NULL, 0, &result) != LITEPARSE_STATUS_OK) {
     bad = fail("markdown parse");
   } else {
@@ -366,9 +410,12 @@ static int stage_markdown(const char *path) {
 }
 
 static int stage_content(LiteParseParser *parser) {
+  /* The caller's pool needs neither a leading NUL nor terminators. */
+  static const char pool[] = "hello smokeA-1";
   LiteParseTextItem item;
   memset(&item, 0, sizeof item);
-  item.text = cstr("hello smoke");
+  item.text.offset = 0;
+  item.text.len = 11;
   item.x = 72.0f;
   item.y = 100.0f;
   item.width = 80.0f;
@@ -379,9 +426,13 @@ static int stage_content(LiteParseParser *parser) {
   page.width = 612.0f;
   page.height = 792.0f;
   page.item_count = 1;
+  page.label.offset = 11;
+  page.label.len = 3;
   LiteParseContent content;
   liteparse_content_init(&content);
   if (content.size_of_content != sizeof(LiteParseContent)) return fail("content size");
+  content.pool = (const uint8_t *)pool;
+  content.pool_len = sizeof pool - 1;
   content.pages = &page;
   content.pages_len = 1;
   content.items = &item;
@@ -391,7 +442,10 @@ static int stage_content(LiteParseParser *parser) {
     return fail("parse_content");
   }
   const LiteParseResultView *v = liteparse_result_view(result);
-  int bad = !view_contains(v->text, "hello smoke");
+  const char *text = pooled(v->content.pool, v->content.pool_len, v->text);
+  const char *label = pooled(v->content.pool, v->content.pool_len, v->content.pages[0].label);
+  int bad = text == NULL || strstr(text, "hello smoke") == NULL || label == NULL ||
+            strcmp(label, "A-1") != 0;
   if (bad) fail("content text");
   liteparse_result_free(result);
   return bad;
@@ -425,7 +479,8 @@ static uint32_t smoke_ocr_recognize(void *user_data, const LiteParseOcrImage *im
   if (image->pixels.len != (size_t)image->width * image->height * 3) return 2;
   LiteParseOcrWord word;
   memset(&word, 0, sizeof word);
-  word.text = cstr("SMOKEOCRWORD");
+  word.text.ptr = (const uint8_t *)"SMOKEOCRWORD";
+  word.text.len = 12;
   word.x2 = 40.0f;
   word.y2 = 10.0f;
   word.confidence = 0.9f;
@@ -437,7 +492,7 @@ static int stage_ocr(const char *image_path) {
                                        LITEPARSE_UNSET);
   if (parser == NULL) return fail("parser");
   int calls = 0;
-  if (liteparse_parser_set_ocr_callback(parser, smoke_ocr_recognize, &calls, cstr("smoke"), 0) !=
+  if (liteparse_parser_set_ocr_callback(parser, smoke_ocr_recognize, &calls, BYTES("smoke"), 0) !=
       LITEPARSE_STATUS_OK) {
     liteparse_parser_free(parser);
     return fail("set ocr callback");
@@ -445,13 +500,15 @@ static int stage_ocr(const char *image_path) {
   LiteParseDocument *document = NULL;
   LiteParseResult *result = NULL;
   int bad = 0;
-  if (liteparse_document_open_path(parser, cstr(image_path), &document) != LITEPARSE_STATUS_OK ||
+  if (liteparse_document_open_path(parser, BYTES(image_path), &document) != LITEPARSE_STATUS_OK ||
       liteparse_document_parse(document, NULL, 0, &result) != LITEPARSE_STATUS_OK) {
     bad = fail("ocr parse");
   } else {
     const LiteParseDocumentInfo *info = liteparse_document_info(document);
     if (!(info->flags & LITEPARSE_DOCUMENT_FLAG_CONVERTED)) bad = fail("converted flag");
-    if (calls == 0 || !view_contains(liteparse_result_view(result)->text, "SMOKEOCRWORD")) {
+    const LiteParseResultView *v = liteparse_result_view(result);
+    const char *text = pooled(v->content.pool, v->content.pool_len, v->text);
+    if (calls == 0 || text == NULL || strstr(text, "SMOKEOCRWORD") == NULL) {
       bad = fail("ocr words");
     }
   }
@@ -465,7 +522,7 @@ static int run_document_stages(const char *path) {
   LiteParseParser *parser = new_parser(0, LITEPARSE_UNSET);
   if (parser == NULL) return fail("parser");
   LiteParseDocument *document = NULL;
-  if (liteparse_document_open_path(parser, cstr(path), &document) != LITEPARSE_STATUS_OK) {
+  if (liteparse_document_open_path(parser, BYTES(path), &document) != LITEPARSE_STATUS_OK) {
     liteparse_parser_free(parser);
     return fail("open");
   }
@@ -483,8 +540,16 @@ int main(int argc, char **argv) {
     fprintf(stderr, "usage: %s <document.pdf> [image.png]\n", argv[0]);
     return 2;
   }
-  LiteParseByteView version = liteparse_version();
+  LiteParseByteView version;
+  liteparse_version(&version);
   if (version.len == 0) return fail("version");
+  if (liteparse_abi_version() != LITEPARSE_ABI_VERSION) return fail("abi version");
+  if (liteparse_sizeof(LITEPARSE_TYPE_CONFIG) != sizeof(LiteParseConfig) ||
+      liteparse_sizeof(LITEPARSE_TYPE_TEXT_ITEM) != sizeof(LiteParseTextItem) ||
+      liteparse_sizeof(LITEPARSE_TYPE_RESULT_VIEW) != sizeof(LiteParseResultView) ||
+      liteparse_sizeof(LITEPARSE_TYPE_STR) != sizeof(LiteParseStr) || liteparse_sizeof(9999) != 0) {
+    return fail("sizeof table");
+  }
   int bad = run_document_stages(argv[1]) | stage_result_screenshots(argv[1]) |
             stage_markdown(argv[1]);
   if (argc == 3) bad |= stage_ocr(argv[2]);

@@ -1,6 +1,7 @@
 //! Packs core pages into the flat record arrays behind `LiteParseContent`
-//! and `LiteParseResultView`. Records borrow strings and byte buffers from
-//! the core values, which the owning handle keeps alive.
+//! and `LiteParseResultView`. Strings are copied into the handle's pool;
+//! binary payloads are borrowed from the core values, which the owning
+//! handle keeps alive.
 
 use liteparse::layout::LayoutBlock;
 use liteparse::ocr_merge::PageComplexityStats;
@@ -11,13 +12,14 @@ use liteparse::types::{
 };
 
 use crate::content::LiteParseContent;
-use crate::handle::{LiteParseByteView, array_ptr, bytes_view, optional_str_view, packed_len};
+use crate::handle::{LiteParseStr, Pool, array_ptr, packed_len};
 use crate::records::*;
 
 /// Every flat array a result or content view can reference. Vectors are
 /// never modified after packing, so views may hold pointers into them.
 #[derive(Default)]
 pub(crate) struct Packed {
+    pub pool: Pool,
     pub pages: Vec<LiteParsePage>,
     pub items: Vec<LiteParseTextItem>,
     pub words: Vec<LiteParseWordBox>,
@@ -30,7 +32,7 @@ pub(crate) struct Packed {
     pub annotations: Vec<LiteParseAnnotation>,
     pub quadpoints: Vec<LiteParseRect>,
     pub form_fields: Vec<LiteParseFormField>,
-    pub strings: Vec<LiteParseByteView>,
+    pub strings: Vec<LiteParseStr>,
     pub structure_nodes: Vec<LiteParseStructureNode>,
     pub structure_attributes: Vec<LiteParseStructureAttribute>,
     pub blocks: Vec<LiteParseLayoutBlock>,
@@ -154,8 +156,8 @@ impl Packed {
             self.mcids.extend_from_slice(&node.mcids);
             let (bbox, has_bbox) = optional_rect(node.bbox.as_ref());
             self.struct_nodes.push(LiteParseStructNode {
-                role: bytes_view(node.role.as_bytes()),
-                alt_text: optional_str_view(node.alt_text.as_deref()),
+                role: self.pool.push(&node.role),
+                alt_text: self.pool.push_opt(node.alt_text.as_deref()),
                 bbox,
                 mcid_offset: packed_len(mcid_offset),
                 mcid_count: packed_len(node.mcids.len()),
@@ -163,8 +165,10 @@ impl Packed {
             });
         }
         let image_ref_offset = self.image_refs.len();
-        self.image_refs
-            .extend(page.image_refs.iter().map(LiteParseImageRef::from));
+        for image in page.image_refs {
+            let packed = LiteParseImageRef::pack(&mut self.pool, image);
+            self.image_refs.push(packed);
+        }
         let annotation_offset = self.annotations.len();
         for annotation in page.annotations.unwrap_or_default() {
             let packed = self.annotation(annotation);
@@ -175,20 +179,22 @@ impl Packed {
         let form_field_offset = self.form_fields.len();
         for field in page.form_fields.unwrap_or_default() {
             let option_offset = self.strings.len();
-            self.strings
-                .extend(field.options.iter().map(|s| bytes_view(s.as_bytes())));
+            for option in &field.options {
+                let packed = self.pool.push(option);
+                self.strings.push(packed);
+            }
             let selected_offset = self.strings.len();
-            self.strings.extend(
-                field
-                    .selected_options
-                    .iter()
-                    .map(|s| bytes_view(s.as_bytes())),
-            );
-            self.form_fields.push(LiteParseFormField::pack(
+            for option in &field.selected_options {
+                let packed = self.pool.push(option);
+                self.strings.push(packed);
+            }
+            let packed = LiteParseFormField::pack(
+                &mut self.pool,
                 field,
                 packed_len(option_offset),
                 packed_len(selected_offset),
-            ));
+            );
+            self.form_fields.push(packed);
         }
         let structure_node_offset = self.structure_nodes.len();
         if let Some(tree) = page.structure_tree {
@@ -263,9 +269,9 @@ impl Packed {
             flags,
             width: page.width,
             height: page.height,
-            label: optional_str_view(page.page_label),
-            text: bytes_view(page.text.as_bytes()),
-            markdown: bytes_view(page.markdown.as_bytes()),
+            label: self.pool.push_opt(page.page_label),
+            text: self.pool.push(page.text),
+            markdown: self.pool.push(page.markdown),
             geometry,
             content_bounds,
             complexity: page
@@ -306,8 +312,10 @@ impl Packed {
     /// Pack one text item, appending its words and char codes.
     pub(crate) fn text_item(&mut self, item: &TextItem) -> LiteParseTextItem {
         let word_offset = self.words.len();
-        self.words
-            .extend(item.words.iter().map(LiteParseWordBox::from));
+        for word in &item.words {
+            let packed = LiteParseWordBox::pack(&mut self.pool, word);
+            self.words.push(packed);
+        }
         let char_code_offset = self.char_codes.len();
         self.char_codes.extend_from_slice(&item.char_codes);
         let (font_size, has_font_size) = optional(item.font_size);
@@ -322,9 +330,9 @@ impl Packed {
         let (fill_color, has_fill_color) = optional_color(item.fill_color.as_deref());
         let (stroke_color, has_stroke_color) = optional_color(item.stroke_color.as_deref());
         LiteParseTextItem {
-            text: bytes_view(item.text.as_bytes()),
-            font_name: optional_str_view(item.font_name.as_deref()),
-            link: optional_str_view(item.link.as_deref()),
+            text: self.pool.push(&item.text),
+            font_name: self.pool.push_opt(item.font_name.as_deref()),
+            link: self.pool.push_opt(item.link.as_deref()),
             x: item.x,
             y: item.y,
             width: item.width,
@@ -375,18 +383,16 @@ impl Packed {
         let quadpoint_offset = self.quadpoints.len();
         self.quadpoints
             .extend(annotation.quadpoint_rects.iter().map(LiteParseRect::from));
-        LiteParseAnnotation::pack(annotation, packed_len(quadpoint_offset))
+        LiteParseAnnotation::pack(&mut self.pool, annotation, packed_len(quadpoint_offset))
     }
 
     fn structure_element(&mut self, element: &StructureTreeElement, parent_index: u32, depth: u32) {
         let node_index = self.structure_nodes.len();
         let attribute_offset = self.structure_attributes.len();
-        self.structure_attributes.extend(
-            element
-                .attributes
-                .iter()
-                .map(|(name, value)| structure_attribute(name, value)),
-        );
+        for (name, value) in &element.attributes {
+            let packed = structure_attribute(&mut self.pool, name, value);
+            self.structure_attributes.push(packed);
+        }
         let annotation_offset = self.annotations.len();
         for annotation in &element.annotations {
             let packed = self.annotation(annotation);
@@ -395,11 +401,11 @@ impl Packed {
         let mcid_offset = self.mcids.len();
         self.mcids.extend_from_slice(&element.marked_content_ids);
         self.structure_nodes.push(LiteParseStructureNode {
-            element_type: bytes_view(element.element_type.as_bytes()),
-            id: optional_str_view(element.id.as_deref()),
-            actual_text: optional_str_view(element.actual_text.as_deref()),
-            alt_text: optional_str_view(element.alt_text.as_deref()),
-            title: optional_str_view(element.title.as_deref()),
+            element_type: self.pool.push(&element.element_type),
+            id: self.pool.push_opt(element.id.as_deref()),
+            actual_text: self.pool.push_opt(element.actual_text.as_deref()),
+            alt_text: self.pool.push_opt(element.alt_text.as_deref()),
+            title: self.pool.push_opt(element.title.as_deref()),
             parent_index,
             depth,
             mcid_offset: packed_len(mcid_offset),
@@ -416,13 +422,18 @@ impl Packed {
 
     fn block(&mut self, block: &LayoutBlock) {
         let header_cell_offset = self.cells.len();
-        self.cells
-            .extend(block.header.iter().flatten().map(layout_cell));
+        for cell in block.header.iter().flatten() {
+            let packed = layout_cell(&mut self.pool, cell);
+            self.cells.push(packed);
+        }
         let header_cell_count = self.cells.len() - header_cell_offset;
         let row_offset = self.rows.len();
         for row in block.rows.iter().flatten() {
             let cell_offset = self.cells.len();
-            self.cells.extend(row.iter().map(layout_cell));
+            for cell in row {
+                let packed = layout_cell(&mut self.pool, cell);
+                self.cells.push(packed);
+            }
             self.rows.push(LiteParseLayoutRow {
                 cell_offset: packed_len(cell_offset),
                 cell_count: packed_len(row.len()),
@@ -430,23 +441,20 @@ impl Packed {
         }
         let row_count = self.rows.len() - row_offset;
         let line_offset = self.strings.len();
-        self.strings.extend(
-            block
-                .lines
-                .iter()
-                .flatten()
-                .map(|line| bytes_view(line.as_bytes())),
-        );
+        for line in block.lines.iter().flatten() {
+            let packed = self.pool.push(line);
+            self.strings.push(packed);
+        }
         let line_count = self.strings.len() - line_offset;
         let (level, has_level) = optional(block.level);
         let (header_rows, has_header_rows) = optional(block.header_rows);
         let (bbox, has_bbox) = optional_rect(block.bbox.as_ref());
         self.blocks.push(LiteParseLayoutBlock {
-            text: optional_str_view(block.text.as_deref()),
-            marker: optional_str_view(block.marker.as_deref()),
-            lang: optional_str_view(block.lang.as_deref()),
-            id: optional_str_view(block.id.as_deref()),
-            format: optional_str_view(block.format.as_deref()),
+            text: self.pool.push_opt(block.text.as_deref()),
+            marker: self.pool.push_opt(block.marker.as_deref()),
+            lang: self.pool.push_opt(block.lang.as_deref()),
+            id: self.pool.push_opt(block.id.as_deref()),
+            format: self.pool.push_opt(block.format.as_deref()),
             bbox,
             kind: block_kind(block.kind).unwrap_or(LITEPARSE_BLOCK_UNKNOWN),
             flags: flag_bits(&[
@@ -481,8 +489,8 @@ impl Packed {
         let (heading_font_size, has_heading_font_size) = optional(line.heading_font_size);
         let (mcid, has_mcid) = optional(line.mcid);
         self.projected_lines.push(LiteParseProjectedLine {
-            text: bytes_view(line.text.as_bytes()),
-            dominant_font_name: optional_str_view(line.dominant_font_name.as_deref()),
+            text: self.pool.push(&line.text),
+            dominant_font_name: self.pool.push_opt(line.dominant_font_name.as_deref()),
             bbox: LiteParseRect::from(&line.bbox),
             indent_x: line.indent_x,
             dominant_font_size: line.dominant_font_size,
@@ -550,6 +558,8 @@ impl Packed {
     pub(crate) fn content_view(&self) -> LiteParseContent {
         LiteParseContent {
             size_of_content: size_of::<LiteParseContent>(),
+            pool: self.pool.ptr(),
+            pool_len: self.pool.len(),
             pages: array_ptr(&self.pages),
             pages_len: self.pages.len(),
             items: array_ptr(&self.items),

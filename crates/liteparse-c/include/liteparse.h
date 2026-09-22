@@ -6,6 +6,267 @@
 #include <stdint.h>
 
 /**
+ * Bumped whenever an exported struct, constant, or function signature
+ * changes incompatibly. Compare with `liteparse_abi_version()` at load.
+ */
+#define LITEPARSE_ABI_VERSION 1
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseByteView`.
+ */
+#define LITEPARSE_TYPE_BYTE_VIEW 0
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStr`.
+ */
+#define LITEPARSE_TYPE_STR 1
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseRect`.
+ */
+#define LITEPARSE_TYPE_RECT 2
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageGeometry`.
+ */
+#define LITEPARSE_TYPE_PAGE_GEOMETRY 3
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageComplexity`.
+ */
+#define LITEPARSE_TYPE_PAGE_COMPLEXITY 4
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseTextItem`.
+ */
+#define LITEPARSE_TYPE_TEXT_ITEM 5
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseWordBox`.
+ */
+#define LITEPARSE_TYPE_WORD_BOX 6
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseGraphic`.
+ */
+#define LITEPARSE_TYPE_GRAPHIC 7
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStructNode`.
+ */
+#define LITEPARSE_TYPE_STRUCT_NODE 8
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseImageRef`.
+ */
+#define LITEPARSE_TYPE_IMAGE_REF 9
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseImage`.
+ */
+#define LITEPARSE_TYPE_IMAGE 10
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseAnnotation`.
+ */
+#define LITEPARSE_TYPE_ANNOTATION 11
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseFormField`.
+ */
+#define LITEPARSE_TYPE_FORM_FIELD 12
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStructureNode`.
+ */
+#define LITEPARSE_TYPE_STRUCTURE_NODE 13
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStructureAttribute`.
+ */
+#define LITEPARSE_TYPE_STRUCTURE_ATTRIBUTE 14
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseLayoutBlock`.
+ */
+#define LITEPARSE_TYPE_LAYOUT_BLOCK 15
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseLayoutCell`.
+ */
+#define LITEPARSE_TYPE_LAYOUT_CELL 16
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseLayoutRow`.
+ */
+#define LITEPARSE_TYPE_LAYOUT_ROW 17
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseVectorShape`.
+ */
+#define LITEPARSE_TYPE_VECTOR_SHAPE 18
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseVectorLine`.
+ */
+#define LITEPARSE_TYPE_VECTOR_LINE 19
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseOutlineEntry`.
+ */
+#define LITEPARSE_TYPE_OUTLINE_ENTRY 20
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageError`.
+ */
+#define LITEPARSE_TYPE_PAGE_ERROR 21
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseXfaPacket`.
+ */
+#define LITEPARSE_TYPE_XFA_PACKET 22
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseDocumentMeta`.
+ */
+#define LITEPARSE_TYPE_DOCUMENT_META 23
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseScreenshot`.
+ */
+#define LITEPARSE_TYPE_SCREENSHOT 24
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseScreenshotRect`.
+ */
+#define LITEPARSE_TYPE_SCREENSHOT_RECT 25
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseProjectedLine`.
+ */
+#define LITEPARSE_TYPE_PROJECTED_LINE 26
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseProjectedRegion`.
+ */
+#define LITEPARSE_TYPE_PROJECTED_REGION 27
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseItemFrame`.
+ */
+#define LITEPARSE_TYPE_ITEM_FRAME 28
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePage`.
+ */
+#define LITEPARSE_TYPE_PAGE 29
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseContent`.
+ */
+#define LITEPARSE_TYPE_CONTENT 30
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseResultView`.
+ */
+#define LITEPARSE_TYPE_RESULT_VIEW 31
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseSearchView`.
+ */
+#define LITEPARSE_TYPE_SEARCH_VIEW 32
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseScreenshotsView`.
+ */
+#define LITEPARSE_TYPE_SCREENSHOTS_VIEW 33
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseComplexityView`.
+ */
+#define LITEPARSE_TYPE_COMPLEXITY_VIEW 34
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseDocumentInfo`.
+ */
+#define LITEPARSE_TYPE_DOCUMENT_INFO 35
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseRenderRegion`.
+ */
+#define LITEPARSE_TYPE_RENDER_REGION 36
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseConfig`.
+ */
+#define LITEPARSE_TYPE_CONFIG 37
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseHeader`.
+ */
+#define LITEPARSE_TYPE_HEADER 38
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageOrientationCorrection`.
+ */
+#define LITEPARSE_TYPE_PAGE_ORIENTATION_CORRECTION 39
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseOcrImage`.
+ */
+#define LITEPARSE_TYPE_OCR_IMAGE 40
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseOcrWord`.
+ */
+#define LITEPARSE_TYPE_OCR_WORD 41
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageObjectPage`.
+ */
+#define LITEPARSE_TYPE_PAGE_OBJECT_PAGE 42
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseMatrix`.
+ */
+#define LITEPARSE_TYPE_MATRIX 43
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePdfBounds`.
+ */
+#define LITEPARSE_TYPE_PDF_BOUNDS 44
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageObject`.
+ */
+#define LITEPARSE_TYPE_PAGE_OBJECT 45
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePathSegment`.
+ */
+#define LITEPARSE_TYPE_PATH_SEGMENT 46
+
+/**
+ * `liteparse_sizeof` selector for `LiteParsePageObjectsView`.
+ */
+#define LITEPARSE_TYPE_PAGE_OBJECTS_VIEW 47
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseRawTextPage`.
+ */
+#define LITEPARSE_TYPE_RAW_TEXT_PAGE 48
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseRawTextItem`.
+ */
+#define LITEPARSE_TYPE_RAW_TEXT_ITEM 49
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseRawTextView`.
+ */
+#define LITEPARSE_TYPE_RAW_TEXT_VIEW 50
+
+/**
  * Values for `LiteParseConfig.output_format`.
  */
 #define LITEPARSE_OUTPUT_FORMAT_JSON 0
@@ -776,6 +1037,19 @@ typedef struct {
 } LiteParseConfig;
 
 /**
+ * A UTF-8 string stored in the owning view's `pool`: bytes
+ * `pool[offset .. offset + len]`, followed by a NUL byte that `len` does not
+ * count. Absent and empty strings are both `len == 0`; the pool starts with
+ * a NUL so `{0, 0}` also reads as an empty C string. Records hold no
+ * pointers, so a view's arrays and pool can be copied out of the handle and
+ * read from anywhere.
+ */
+typedef struct {
+  uint32_t offset;
+  uint32_t len;
+} LiteParseStr;
+
+/**
  * Visible PDF box in bottom-left-origin page space, before `user_unit`.
  */
 typedef struct {
@@ -824,11 +1098,11 @@ typedef struct {
   float width;
   float height;
   /**
-   * The PDF `/PageLabels` entry, or a null view.
+   * The PDF `/PageLabels` entry, or empty.
    */
-  LiteParseByteView label;
-  LiteParseByteView text;
-  LiteParseByteView markdown;
+  LiteParseStr label;
+  LiteParseStr text;
+  LiteParseStr markdown;
   LiteParsePageGeometry geometry;
   LiteParseRect content_bounds;
   LiteParsePageComplexity complexity;
@@ -868,9 +1142,9 @@ typedef struct {
  * `char_codes` arrays.
  */
 typedef struct {
-  LiteParseByteView text;
-  LiteParseByteView font_name;
-  LiteParseByteView link;
+  LiteParseStr text;
+  LiteParseStr font_name;
+  LiteParseStr link;
   float x;
   float y;
   float width;
@@ -904,7 +1178,7 @@ typedef struct {
  * Word box in top-left-origin 72-DPI page space.
  */
 typedef struct {
-  LiteParseByteView text;
+  LiteParseStr text;
   float x;
   float y;
   float width;
@@ -939,8 +1213,8 @@ typedef struct {
  * `mcid_offset/count` index the view's `mcids` array.
  */
 typedef struct {
-  LiteParseByteView role;
-  LiteParseByteView alt_text;
+  LiteParseStr role;
+  LiteParseStr alt_text;
   LiteParseRect bbox;
   uint32_t mcid_offset;
   uint32_t mcid_count;
@@ -954,8 +1228,8 @@ typedef struct {
  * Per-page raster image object, present even when bytes were not extracted.
  */
 typedef struct {
-  LiteParseByteView id;
-  LiteParseByteView format;
+  LiteParseStr id;
+  LiteParseStr format;
   LiteParseRect bbox;
   uint32_t obj_index;
   uint32_t pixel_width;
@@ -972,11 +1246,11 @@ typedef struct {
  * Extracted image with encoded bytes.
  */
 typedef struct {
-  LiteParseByteView id;
-  LiteParseByteView name;
-  LiteParseByteView path;
-  LiteParseByteView format;
-  LiteParseByteView duplicate_of;
+  LiteParseStr id;
+  LiteParseStr name;
+  LiteParseStr path;
+  LiteParseStr format;
+  LiteParseStr duplicate_of;
   LiteParseByteView bytes;
   LiteParseRect bbox;
   uint32_t page;
@@ -990,12 +1264,12 @@ typedef struct {
  * view's `quadpoints` array.
  */
 typedef struct {
-  LiteParseByteView subtype;
-  LiteParseByteView contents;
-  LiteParseByteView created;
-  LiteParseByteView modified;
-  LiteParseByteView title;
-  LiteParseByteView uri;
+  LiteParseStr subtype;
+  LiteParseStr contents;
+  LiteParseStr created;
+  LiteParseStr modified;
+  LiteParseStr title;
+  LiteParseStr uri;
   LiteParseRect rect;
   uint32_t quadpoint_offset;
   uint32_t quadpoint_count;
@@ -1009,12 +1283,12 @@ typedef struct {
  * AcroForm widget. Option ranges index the view's `strings` array.
  */
 typedef struct {
-  LiteParseByteView id;
-  LiteParseByteView field_type;
-  LiteParseByteView name;
-  LiteParseByteView alternate_name;
-  LiteParseByteView value;
-  LiteParseByteView export_value;
+  LiteParseStr id;
+  LiteParseStr field_type;
+  LiteParseStr name;
+  LiteParseStr alternate_name;
+  LiteParseStr value;
+  LiteParseStr export_value;
   LiteParseRect rect;
   uint32_t page;
   int32_t annotation_index;
@@ -1040,11 +1314,11 @@ typedef struct {
  * `mcids`, `structure_attributes`, and `annotations` arrays.
  */
 typedef struct {
-  LiteParseByteView element_type;
-  LiteParseByteView id;
-  LiteParseByteView actual_text;
-  LiteParseByteView alt_text;
-  LiteParseByteView title;
+  LiteParseStr element_type;
+  LiteParseStr id;
+  LiteParseStr actual_text;
+  LiteParseStr alt_text;
+  LiteParseStr title;
   uint32_t parent_index;
   /**
    * Nesting depth, 0 for roots.
@@ -1062,8 +1336,8 @@ typedef struct {
  * One `/A` attribute. Booleans are `kind == BOOL` with `number` 0 or 1.
  */
 typedef struct {
-  LiteParseByteView name;
-  LiteParseByteView string;
+  LiteParseStr name;
+  LiteParseStr string;
   /**
    * `LITEPARSE_STRUCTURE_ATTR_*`.
    */
@@ -1080,14 +1354,14 @@ typedef struct {
  * `line_offset/count` into `strings`.
  */
 typedef struct {
-  LiteParseByteView text;
-  LiteParseByteView marker;
-  LiteParseByteView lang;
+  LiteParseStr text;
+  LiteParseStr marker;
+  LiteParseStr lang;
   /**
    * Figure image id and encoded format.
    */
-  LiteParseByteView id;
-  LiteParseByteView format;
+  LiteParseStr id;
+  LiteParseStr format;
   LiteParseRect bbox;
   /**
    * `LITEPARSE_BLOCK_*`.
@@ -1111,7 +1385,7 @@ typedef struct {
 } LiteParseLayoutBlock;
 
 typedef struct {
-  LiteParseByteView text;
+  LiteParseStr text;
   LiteParseRect bbox;
   /**
    * Merge span; `0` or `1` means a single cell.
@@ -1161,7 +1435,7 @@ typedef struct {
  * destination is not a page; `y_pdf` is PDF user space.
  */
 typedef struct {
-  LiteParseByteView title;
+  LiteParseStr title;
   int32_t page_index;
   float y_pdf;
   /**
@@ -1175,7 +1449,7 @@ typedef struct {
 } LiteParseOutlineEntry;
 
 typedef struct {
-  LiteParseByteView message;
+  LiteParseStr message;
   uint32_t page_number;
 } LiteParsePageError;
 
@@ -1183,7 +1457,8 @@ typedef struct {
  * Packed page content. Read from a result view, or filled by the caller for
  * `liteparse_parser_parse_content`.
  *
- * Pages carry offset/count ranges into the flat arrays. `strings` holds
+ * Pages carry offset/count ranges into the flat arrays. `pool` is the UTF-8
+ * string pool every `LiteParseStr` in the content indexes; `strings` holds
  * form-field options and block source lines; `annotations` holds page and
  * structure-node annotations; `mcids` holds struct-node and structure-tree
  * marked-content ids; `words` and `char_codes` are shared by every text
@@ -1195,6 +1470,12 @@ typedef struct {
    * Must equal `sizeof(LiteParseContent)` on input.
    */
   size_t size_of_content;
+  /**
+   * String pool. On output it starts with a NUL byte and every string is
+   * NUL-terminated; on input only the `LiteParseStr` ranges matter.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
   const LiteParsePage *pages;
   size_t pages_len;
   const LiteParseTextItem *items;
@@ -1219,7 +1500,7 @@ typedef struct {
   size_t quadpoints_len;
   const LiteParseFormField *form_fields;
   size_t form_fields_len;
-  const LiteParseByteView *strings;
+  const LiteParseStr *strings;
   size_t strings_len;
   const LiteParseStructureNode *structure_nodes;
   size_t structure_nodes_len;
@@ -1253,6 +1534,11 @@ typedef struct {
    * `LITEPARSE_DOCUMENT_FLAG_*` bits.
    */
   uint32_t flags;
+  /**
+   * String pool behind the outline titles.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
   /**
    * Bookmarks, walked once at open.
    */
@@ -1293,7 +1579,7 @@ typedef struct {
  * for top-level content objects.
  */
 typedef struct {
-  LiteParseByteView label;
+  LiteParseStr label;
   LiteParsePageGeometry geometry;
   uint32_t page_number;
   /**
@@ -1399,13 +1685,18 @@ typedef struct {
 } LiteParsePathSegment;
 
 typedef struct {
+  /**
+   * String pool behind every `LiteParseStr` in this view.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
   const LiteParsePageObjectPage *pages;
   size_t pages_len;
   const LiteParsePageObject *objects;
   size_t objects_len;
   const LiteParsePathSegment *segments;
   size_t segments_len;
-  const LiteParseByteView *filters;
+  const LiteParseStr *filters;
   size_t filters_len;
 } LiteParsePageObjectsView;
 
@@ -1442,7 +1733,7 @@ typedef uint32_t (*LiteParseOcrRecognizeFn)(void *user_data,
  * One extracted page. `item_offset/count` index the view's `items`.
  */
 typedef struct {
-  LiteParseByteView label;
+  LiteParseStr label;
   LiteParsePageGeometry geometry;
   uint32_t page_number;
   /**
@@ -1461,8 +1752,8 @@ typedef struct {
  * the char codes) index `glyph_names`.
  */
 typedef struct {
-  LiteParseByteView text;
-  LiteParseByteView font_name;
+  LiteParseStr text;
+  LiteParseStr font_name;
   /**
    * Advance gap across a lone generated space, in page points.
    */
@@ -1502,31 +1793,36 @@ typedef struct {
 } LiteParseRawTextItem;
 
 typedef struct {
+  /**
+   * String pool behind every `LiteParseStr` in this view.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
   const LiteParseRawTextPage *pages;
   size_t pages_len;
   const LiteParseRawTextItem *items;
   size_t items_len;
   const uint32_t *char_codes;
   size_t char_codes_len;
-  const LiteParseByteView *glyph_names;
+  const LiteParseStr *glyph_names;
   size_t glyph_names_len;
 } LiteParseRawTextView;
 
 /**
- * Document metadata. Absent strings are null views; scalars use flags.
+ * Document metadata. Absent strings are empty; scalars use flags.
  */
 typedef struct {
   /**
    * Authored `/Info` values read at document open.
    */
-  LiteParseByteView title;
-  LiteParseByteView author;
-  LiteParseByteView subject;
-  LiteParseByteView keywords;
-  LiteParseByteView trapped;
-  LiteParseByteView creation_date;
-  LiteParseByteView mod_date;
-  LiteParseByteView xmp;
+  LiteParseStr title;
+  LiteParseStr author;
+  LiteParseStr subject;
+  LiteParseStr keywords;
+  LiteParseStr trapped;
+  LiteParseStr creation_date;
+  LiteParseStr mod_date;
+  LiteParseStr xmp;
   uint64_t permissions;
   uint64_t raw_file_size;
   int32_t file_version;
@@ -1586,8 +1882,8 @@ typedef struct {
  * XFA packet; `content` is lossily decoded UTF-8.
  */
 typedef struct {
-  LiteParseByteView name;
-  LiteParseByteView content;
+  LiteParseStr name;
+  LiteParseStr content;
   uint32_t index;
   uint32_t content_length;
   /**
@@ -1611,8 +1907,8 @@ typedef struct {
  * (child ordinals from the page's region root).
  */
 typedef struct {
-  LiteParseByteView text;
-  LiteParseByteView dominant_font_name;
+  LiteParseStr text;
+  LiteParseStr dominant_font_name;
   LiteParseRect bbox;
   float indent_x;
   float dominant_font_size;
@@ -1652,16 +1948,17 @@ typedef struct {
 /**
  * Everything a result exposes. `content` is the page-content model shared
  * with `liteparse_parser_parse_content`; the remaining arrays are result
- * only. Projected spans share `content.words` and `content.char_codes`.
+ * only. Projected spans share `content.words` and `content.char_codes`, and
+ * every `LiteParseStr` in the view indexes `content.pool`.
  */
 typedef struct {
   LiteParseContent content;
   /**
    * Full-document plain text or Markdown, per the output format.
    */
-  LiteParseByteView text;
-  LiteParseByteView creator;
-  LiteParseByteView producer;
+  LiteParseStr text;
+  LiteParseStr creator;
+  LiteParseStr producer;
   LiteParseDocumentMeta doc_meta;
   uint32_t total_pages;
   uint32_t image_error_count;
@@ -1698,9 +1995,12 @@ typedef struct {
 } LiteParseResultView;
 
 /**
- * Text items copied out of a result by `liteparse_result_search`.
+ * Text items copied out of a result by `liteparse_result_search`. Strings
+ * index the view's own `pool`.
  */
 typedef struct {
+  const uint8_t *pool;
+  size_t pool_len;
   const LiteParseTextItem *items;
   size_t items_len;
   const LiteParseWordBox *words;
@@ -1781,6 +2081,18 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * The ABI version this library was built with.
+ */
+uint32_t liteparse_abi_version(void);
+
+/**
+ * `sizeof` the struct a `LITEPARSE_TYPE_*` selector names, or zero for an
+ * unknown selector. Lets a binding that declares layouts by hand assert
+ * them against the library it loaded.
+ */
+size_t liteparse_sizeof(uint32_t type_id);
+
+/**
  * Destroy a complexity handle. Null is allowed.
  */
 void liteparse_complexity_free(LiteParseComplexity *complexity);
@@ -1836,11 +2148,14 @@ LiteParseStatus liteparse_parser_parse_content(const LiteParseParser *parser,
 
 /**
  * Open a path, converting non-PDF input once for the document's lifetime.
+ * `path` is `path_len` bytes of UTF-8, not NUL-terminated.
  *
- * `parser` must be live, `path` readable UTF-8, and `out` writable.
+ * `parser` must be live, `path` readable for `path_len` bytes, and `out`
+ * writable.
  */
 LiteParseStatus liteparse_document_open_path(const LiteParseParser *parser,
-                                             LiteParseByteView path,
+                                             const uint8_t *path,
+                                             size_t path_len,
                                              LiteParseDocument **out);
 
 /**
@@ -1955,11 +2270,14 @@ LiteParseStatus liteparse_ocr_sink_add(LiteParseOcrSink *sink,
                                        size_t count);
 
 /**
- * Set the callback's failure message.
+ * Set the callback's failure message: `message_len` bytes of UTF-8.
  *
- * `sink` must belong to the current callback and `message` must be readable.
+ * `sink` must belong to the current callback and `message` must be
+ * readable for `message_len` bytes.
  */
-LiteParseStatus liteparse_ocr_sink_set_error(LiteParseOcrSink *sink, LiteParseByteView message);
+LiteParseStatus liteparse_ocr_sink_set_error(LiteParseOcrSink *sink,
+                                             const uint8_t *message,
+                                             size_t message_len);
 
 /**
  * Destroy a page-objects handle. Null is allowed.
@@ -1982,16 +2300,19 @@ LiteParseStatus liteparse_parser_new(const LiteParseConfig *config, LiteParsePar
 
 /**
  * Register (or clear, with a null `recognize`) an in-process OCR engine.
- * `flags` is a mask of `LITEPARSE_OCR_FLAG_*`. Documents opened before a
- * change keep the engine they were opened with.
+ * `name` is `name_len` bytes of UTF-8 (null for a default name); `flags`
+ * is a mask of `LITEPARSE_OCR_FLAG_*`. Documents opened before a change
+ * keep the engine they were opened with.
  *
  * The callback and `user_data` must remain valid and thread-safe while the
- * parser or any document opened from it lives. `name` must be readable.
+ * parser or any document opened from it lives. `name` must be readable for
+ * `name_len` bytes.
  */
 LiteParseStatus liteparse_parser_set_ocr_callback(const LiteParseParser *parser,
                                                   LiteParseOcrRecognizeFn recognize,
                                                   void *user_data,
-                                                  LiteParseByteView name,
+                                                  const uint8_t *name,
+                                                  size_t name_len,
                                                   uint32_t flags);
 
 /**
@@ -2034,14 +2355,17 @@ LiteParseStatus liteparse_result_to_json(const LiteParseResult *result, LitePars
 
 /**
  * Find phrase matches on one page as merged text items. `page_index` is a
- * 0-based index into `content.pages`, not a source page number. `flags` is
- * a mask of `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
+ * 0-based index into `content.pages`, not a source page number. `phrase`
+ * is `phrase_len` bytes of UTF-8. `flags` is a mask of
+ * `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
  *
- * `result` must be live, `phrase` readable UTF-8, and `out` writable.
+ * `result` must be live, `phrase` readable for `phrase_len` bytes, and
+ * `out` writable.
  */
 LiteParseStatus liteparse_result_search(const LiteParseResult *result,
                                         size_t page_index,
-                                        LiteParseByteView phrase,
+                                        const uint8_t *phrase,
+                                        size_t phrase_len,
                                         uint32_t flags,
                                         LiteParseSearchMatches **out);
 
@@ -2070,15 +2394,17 @@ void liteparse_screenshots_free(LiteParseScreenshots *screenshots);
 const LiteParseScreenshotsView *liteparse_screenshots_view(const LiteParseScreenshots *screenshots);
 
 /**
- * Borrow this thread's most recent failure message. The view stays valid
- * until the next failed call on the same thread.
+ * Borrow this thread's most recent failure message into `out`. The view
+ * stays valid until the next failed call on the same thread; read it on
+ * the thread that made the failing call, before any other call that may
+ * fail. Null `out` is a no-op.
  */
-LiteParseByteView liteparse_last_error(void);
+void liteparse_last_error(LiteParseByteView *out);
 
 /**
- * Borrow the static binding version string.
+ * Borrow the static binding version string into `out`. Null is a no-op.
  */
-LiteParseByteView liteparse_version(void);
+void liteparse_version(LiteParseByteView *out);
 
 #ifdef __cplusplus
 }  // extern "C"

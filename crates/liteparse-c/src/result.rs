@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::content::LiteParseContent;
 use crate::handle::{
-    LiteParseByteView, array_ptr, bytes_view, create_handle, free_handle, opaque_handles,
-    optional_str_view, required_view_str, state_ref, view_of, view_state, write_out,
+    LiteParseByteView, LiteParseStr, array_ptr, bytes_view, create_handle, free_handle,
+    opaque_handles, required_str, state_ref, view_of, view_state, write_out,
 };
 use crate::pack::{Packed, PageParts};
 use crate::records::*;
@@ -49,15 +49,16 @@ pub const LITEPARSE_SEARCH_FLAG_CASE_SENSITIVE: u32 = 1 << 0;
 
 /// Everything a result exposes. `content` is the page-content model shared
 /// with `liteparse_parser_parse_content`; the remaining arrays are result
-/// only. Projected spans share `content.words` and `content.char_codes`.
+/// only. Projected spans share `content.words` and `content.char_codes`, and
+/// every `LiteParseStr` in the view indexes `content.pool`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LiteParseResultView {
     pub content: LiteParseContent,
     /// Full-document plain text or Markdown, per the output format.
-    pub text: LiteParseByteView,
-    pub creator: LiteParseByteView,
-    pub producer: LiteParseByteView,
+    pub text: LiteParseStr,
+    pub creator: LiteParseStr,
+    pub producer: LiteParseStr,
     pub doc_meta: LiteParseDocumentMeta,
     pub total_pages: u32,
     pub image_error_count: u32,
@@ -89,10 +90,13 @@ pub struct LiteParseResultView {
     pub flattened_page_numbers_len: usize,
 }
 
-/// Text items copied out of a result by `liteparse_result_search`.
+/// Text items copied out of a result by `liteparse_result_search`. Strings
+/// index the view's own `pool`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LiteParseSearchView {
+    pub pool: *const u8,
+    pub pool_len: usize,
     pub items: *const LiteParseTextItem,
     pub items_len: usize,
     pub words: *const LiteParseWordBox,
@@ -108,9 +112,9 @@ enum Source {
 
 /// Result-level scalars that differ between parse and extract sources.
 struct ResultFacts {
-    text: LiteParseByteView,
-    creator: LiteParseByteView,
-    producer: LiteParseByteView,
+    text: LiteParseStr,
+    creator: LiteParseStr,
+    producer: LiteParseStr,
     doc_meta: Option<LiteParseDocumentMeta>,
     total_pages: u32,
     image_error_count: u32,
@@ -157,9 +161,17 @@ impl ResultState {
                 geometries.get(index).copied().flatten(),
             ));
         }
-        packed.images = views(&result.images);
-        packed.outline = views(&result.outline);
-        packed.page_errors = views(&result.page_errors);
+        packed.images = pack_all(&mut packed.pool, &result.images, LiteParseImage::pack);
+        packed.outline = pack_all(
+            &mut packed.pool,
+            &result.outline,
+            LiteParseOutlineEntry::pack,
+        );
+        packed.page_errors = pack_all(
+            &mut packed.pool,
+            &result.page_errors,
+            LiteParsePageError::pack,
+        );
         let requested_dpi = config.dpi;
         let screenshots_with_dpi = result.screenshots.iter().map(|shot| {
             let dpi = result
@@ -172,15 +184,18 @@ impl ResultState {
             (shot, dpi)
         });
         let (screenshots, screenshot_rects) = pack_screenshots(screenshots_with_dpi);
-        let xfa_packets = views(result.xfa_packets.as_deref().unwrap_or_default());
+        let xfa_packets = pack_all(
+            &mut packed.pool,
+            result.xfa_packets.as_deref().unwrap_or_default(),
+            LiteParseXfaPacket::pack,
+        );
         let facts = ResultFacts {
-            text: bytes_view(result.text.as_bytes()),
-            creator: optional_str_view(result.creator.as_deref()),
-            producer: optional_str_view(result.producer.as_deref()),
-            doc_meta: result
-                .doc_meta
-                .as_ref()
-                .map(|meta| LiteParseDocumentMeta::build(meta, descriptive.as_ref())),
+            text: packed.pool.push(&result.text),
+            creator: packed.pool.push_opt(result.creator.as_deref()),
+            producer: packed.pool.push_opt(result.producer.as_deref()),
+            doc_meta: result.doc_meta.as_ref().map(|meta| {
+                LiteParseDocumentMeta::pack(&mut packed.pool, meta, descriptive.as_ref())
+            }),
             total_pages: result.total_pages,
             image_error_count: result.image_error_count,
             form_type: result.form_type,
@@ -216,12 +231,16 @@ impl ResultState {
                 geometries.get(index).copied().flatten(),
             ));
         }
-        packed.images = views(&pages.images);
-        packed.page_errors = views(&pages.page_errors);
+        packed.images = pack_all(&mut packed.pool, &pages.images, LiteParseImage::pack);
+        packed.page_errors = pack_all(
+            &mut packed.pool,
+            &pages.page_errors,
+            LiteParsePageError::pack,
+        );
         let facts = ResultFacts {
-            text: LiteParseByteView::default(),
-            creator: LiteParseByteView::default(),
-            producer: LiteParseByteView::default(),
+            text: LiteParseStr::default(),
+            creator: LiteParseStr::default(),
+            producer: LiteParseStr::default(),
             doc_meta: None,
             total_pages: 0,
             image_error_count: pages.image_error_count,
@@ -444,9 +463,7 @@ pub unsafe extern "C" fn liteparse_result_to_json(
 }
 
 pub(crate) struct SearchState {
-    /// Owns the strings `packed` borrows.
-    #[allow(dead_code)]
-    source: Vec<TextItem>,
+    /// Backing storage for `view`.
     #[allow(dead_code)]
     packed: Packed,
     view: LiteParseSearchView,
@@ -455,15 +472,18 @@ pub(crate) struct SearchState {
 view_state!(SearchState => LiteParseSearchView, view);
 
 /// Find phrase matches on one page as merged text items. `page_index` is a
-/// 0-based index into `content.pages`, not a source page number. `flags` is
-/// a mask of `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
+/// 0-based index into `content.pages`, not a source page number. `phrase`
+/// is `phrase_len` bytes of UTF-8. `flags` is a mask of
+/// `LITEPARSE_SEARCH_FLAG_*`. Matches outlive the result.
 ///
-/// `result` must be live, `phrase` readable UTF-8, and `out` writable.
+/// `result` must be live, `phrase` readable for `phrase_len` bytes, and
+/// `out` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_result_search(
     result: *const LiteParseResult,
     page_index: usize,
-    phrase: LiteParseByteView,
+    phrase: *const u8,
+    phrase_len: usize,
     flags: u32,
     out: *mut *mut LiteParseSearchMatches,
 ) -> LiteParseStatus {
@@ -474,7 +494,7 @@ pub unsafe extern "C" fn liteparse_result_search(
                     "search flags contain unknown bits",
                 ));
             }
-            let phrase = required_view_str(phrase, "phrase")?;
+            let phrase = required_str(phrase, phrase_len, "phrase")?.to_owned();
             let state = state_ref(result)?;
             let options = SearchOptions {
                 phrase,
@@ -487,6 +507,8 @@ pub unsafe extern "C" fn liteparse_result_search(
                 packed.items.push(record);
             }
             let view = LiteParseSearchView {
+                pool: packed.pool.ptr(),
+                pool_len: packed.pool.len(),
                 items: array_ptr(&packed.items),
                 items_len: packed.items.len(),
                 words: array_ptr(&packed.words),
@@ -494,11 +516,7 @@ pub unsafe extern "C" fn liteparse_result_search(
                 char_codes: array_ptr(&packed.char_codes),
                 char_codes_len: packed.char_codes.len(),
             };
-            Ok(SearchState {
-                source,
-                packed,
-                view,
-            })
+            Ok(SearchState { packed, view })
         })
     }
 }

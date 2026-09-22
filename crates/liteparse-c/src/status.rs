@@ -2,7 +2,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::handle::{LiteParseByteView, bytes_view};
+use crate::handle::{LiteParseByteView, bytes_view, write_out};
 
 /// Fixed-width status code returned by fallible API functions.
 pub type LiteParseStatus = u32;
@@ -95,17 +95,20 @@ fn store_error(error: &FfiError) {
     LAST_ERROR.with(|slot| slot.borrow_mut().clone_from(&error.message));
 }
 
-/// Borrow this thread's most recent failure message. The view stays valid
-/// until the next failed call on the same thread.
+/// Borrow this thread's most recent failure message into `out`. The view
+/// stays valid until the next failed call on the same thread; read it on
+/// the thread that made the failing call, before any other call that may
+/// fail. Null `out` is a no-op.
 #[unsafe(no_mangle)]
-pub extern "C" fn liteparse_last_error() -> LiteParseByteView {
-    LAST_ERROR.with(|slot| bytes_view(slot.borrow().as_bytes()))
+pub unsafe extern "C" fn liteparse_last_error(out: *mut LiteParseByteView) {
+    let view = LAST_ERROR.with(|slot| bytes_view(slot.borrow().as_bytes()));
+    unsafe { write_out(out, view) };
 }
 
-/// Borrow the static binding version string.
+/// Borrow the static binding version string into `out`. Null is a no-op.
 #[unsafe(no_mangle)]
-pub extern "C" fn liteparse_version() -> LiteParseByteView {
-    bytes_view(env!("CARGO_PKG_VERSION").as_bytes())
+pub unsafe extern "C" fn liteparse_version(out: *mut LiteParseByteView) {
+    unsafe { write_out(out, bytes_view(env!("CARGO_PKG_VERSION").as_bytes())) };
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {

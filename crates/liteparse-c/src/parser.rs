@@ -7,9 +7,7 @@ use liteparse::{
 };
 
 use crate::config::{LiteParseConfig, owned_config};
-use crate::handle::{
-    LiteParseByteView, create_handle, free_handle, opaque_handles, required_view_str, state_ref,
-};
+use crate::handle::{create_handle, free_handle, opaque_handles, optional_str, state_ref};
 use crate::ocr::{
     CallbackOcrEngine, LITEPARSE_OCR_FLAG_PREFERS_GRAYSCALE, LiteParseOcrRecognizeFn,
 };
@@ -93,17 +91,20 @@ pub unsafe extern "C" fn liteparse_parser_new(
 }
 
 /// Register (or clear, with a null `recognize`) an in-process OCR engine.
-/// `flags` is a mask of `LITEPARSE_OCR_FLAG_*`. Documents opened before a
-/// change keep the engine they were opened with.
+/// `name` is `name_len` bytes of UTF-8 (null for a default name); `flags`
+/// is a mask of `LITEPARSE_OCR_FLAG_*`. Documents opened before a change
+/// keep the engine they were opened with.
 ///
 /// The callback and `user_data` must remain valid and thread-safe while the
-/// parser or any document opened from it lives. `name` must be readable.
+/// parser or any document opened from it lives. `name` must be readable for
+/// `name_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_parser_set_ocr_callback(
     parser: *const LiteParseParser,
     recognize: LiteParseOcrRecognizeFn,
     user_data: *mut c_void,
-    name: LiteParseByteView,
+    name: *const u8,
+    name_len: usize,
     flags: u32,
 ) -> LiteParseStatus {
     boundary(|| {
@@ -114,11 +115,8 @@ pub unsafe extern "C" fn liteparse_parser_set_ocr_callback(
         let engine: Option<Arc<dyn OcrEngine>> = match recognize {
             None => None,
             Some(recognize) => {
-                let name = if name.ptr.is_null() {
-                    "c-callback".to_owned()
-                } else {
-                    unsafe { required_view_str(name, "name") }?
-                };
+                let name = unsafe { optional_str(name, name_len, "name") }?
+                    .map_or_else(|| "c-callback".to_owned(), str::to_owned);
                 Some(Arc::new(CallbackOcrEngine::new(
                     recognize,
                     user_data,

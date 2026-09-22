@@ -4,8 +4,7 @@ use liteparse_pdfium::Library;
 
 use crate::document::DocumentState;
 use crate::handle::{
-    LiteParseByteView, array_ptr, bytes_view, free_handle, opaque_handles, optional_str_view,
-    packed_len, view_of, view_state,
+    LiteParseStr, Pool, array_ptr, free_handle, opaque_handles, packed_len, view_of, view_state,
 };
 use crate::records::{LiteParsePageGeometry, LiteParseRect, flag_bits, optional};
 use crate::render::{load_document, map_pages, page_facts};
@@ -38,7 +37,7 @@ pub const LITEPARSE_RAW_ITEM_FLAG_TRAILING_SPACE_GENERATED: u32 = 1 << 7;
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParseRawTextPage {
-    pub label: LiteParseByteView,
+    pub label: LiteParseStr,
     pub geometry: LiteParsePageGeometry,
     pub page_number: u32,
     /// `LITEPARSE_RAW_PAGE_FLAG_*` bits.
@@ -55,8 +54,8 @@ pub struct LiteParseRawTextPage {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParseRawTextItem {
-    pub text: LiteParseByteView,
-    pub font_name: LiteParseByteView,
+    pub text: LiteParseStr,
+    pub font_name: LiteParseStr,
     /// Advance gap across a lone generated space, in page points.
     pub baseline_gap: f64,
     /// Tight viewport-space bounds of non-generated, non-space glyphs.
@@ -88,13 +87,16 @@ pub struct LiteParseRawTextItem {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LiteParseRawTextView {
+    /// String pool behind every `LiteParseStr` in this view.
+    pub pool: *const u8,
+    pub pool_len: usize,
     pub pages: *const LiteParseRawTextPage,
     pub pages_len: usize,
     pub items: *const LiteParseRawTextItem,
     pub items_len: usize,
     pub char_codes: *const u32,
     pub char_codes_len: usize,
-    pub glyph_names: *const LiteParseByteView,
+    pub glyph_names: *const LiteParseStr,
     pub glyph_names_len: usize,
 }
 
@@ -108,10 +110,9 @@ struct OwnedPage {
 }
 
 pub(crate) struct RawTextState {
-    /// Owns the strings the records borrow.
-    #[allow(dead_code)]
-    source: Vec<OwnedPage>,
     /// Backing storage for `view`.
+    #[allow(dead_code)]
+    pool: Pool,
     #[allow(dead_code)]
     pages: Vec<LiteParseRawTextPage>,
     #[allow(dead_code)]
@@ -119,30 +120,30 @@ pub(crate) struct RawTextState {
     #[allow(dead_code)]
     char_codes: Vec<u32>,
     #[allow(dead_code)]
-    glyph_names: Vec<LiteParseByteView>,
+    glyph_names: Vec<LiteParseStr>,
     view: LiteParseRawTextView,
 }
 
 view_state!(RawTextState => LiteParseRawTextView, view);
 
 impl RawTextState {
-    fn pack(mut source: Vec<OwnedPage>) -> Self {
+    fn pack(source: Vec<OwnedPage>) -> Self {
+        let mut pool = Pool::default();
         let mut pages = Vec::with_capacity(source.len());
         let mut items = Vec::new();
         let mut char_codes = Vec::new();
         let mut glyph_names = Vec::new();
-        for page in &mut source {
+        for page in &source {
             let item_offset = items.len();
-            for item in &mut page.items {
+            for item in &page.items {
                 let char_code_offset = char_codes.len();
-                let item_char_codes = std::mem::take(&mut item.char_codes);
-                char_codes.extend(item_char_codes);
+                char_codes.extend_from_slice(&item.char_codes);
                 let glyph_name_offset = glyph_names.len();
                 glyph_names.extend(
                     item.glyph_names
                         .iter()
                         .flatten()
-                        .map(|name| bytes_view(name.as_bytes())),
+                        .map(|name| pool.push(name)),
                 );
                 let (mcid, has_mcid) = optional(item.mcid);
                 let (fill_color, has_fill_color) = optional(item.fill_color);
@@ -155,8 +156,8 @@ impl RawTextState {
                     height: bounds.bottom - bounds.top,
                 });
                 items.push(LiteParseRawTextItem {
-                    text: bytes_view(item.text.as_bytes()),
-                    font_name: bytes_view(item.font_name.as_bytes()),
+                    text: pool.push(&item.text),
+                    font_name: pool.push(&item.font_name),
                     baseline_gap,
                     grounding_bounds: grounding_bounds.unwrap_or_default(),
                     angle_radians: item.angle_radians,
@@ -200,7 +201,7 @@ impl RawTextState {
             }
             let (geometry, has_rotation) = page.geometry.unwrap_or_default();
             pages.push(LiteParseRawTextPage {
-                label: optional_str_view(page.page_label.as_deref()),
+                label: pool.push_opt(page.page_label.as_deref()),
                 geometry,
                 page_number: page.page_number,
                 flags: flag_bits(&[
@@ -217,6 +218,8 @@ impl RawTextState {
             });
         }
         let view = LiteParseRawTextView {
+            pool: pool.ptr(),
+            pool_len: pool.len(),
             pages: array_ptr(&pages),
             pages_len: pages.len(),
             items: array_ptr(&items),
@@ -227,7 +230,7 @@ impl RawTextState {
             glyph_names_len: glyph_names.len(),
         };
         Self {
-            source,
+            pool,
             pages,
             items,
             char_codes,

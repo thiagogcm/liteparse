@@ -1,7 +1,9 @@
-//! `repr(C)` records shared by every handle view. Records hold no pointers
-//! other than `LiteParseByteView`, no `bool`, and no `size_t`: optionals and
-//! boolean properties are bits in a per-record `flags`, and collections are
-//! `u32` offset/count ranges into flat arrays owned by the handle.
+//! `repr(C)` records shared by every handle view. Records hold no `bool` and
+//! no `size_t`: optionals and boolean properties are bits in a per-record
+//! `flags`, collections are `u32` offset/count ranges into flat arrays owned
+//! by the handle, and strings are `LiteParseStr` ranges into the handle's
+//! pool. The only pointers are the `LiteParseByteView` binary payloads of
+//! images and screenshots.
 
 use liteparse::layout::LayoutCell;
 use liteparse::ocr_merge::{
@@ -13,7 +15,7 @@ use liteparse::types::{
     VectorShape, WordBox, XfaPacket,
 };
 
-use crate::handle::{LiteParseByteView, bytes_view, optional_str_view};
+use crate::handle::{LiteParseByteView, LiteParseStr, Pool, bytes_view};
 
 /// A rectangle in top-left-origin 72-DPI viewport space.
 #[repr(C)]
@@ -324,9 +326,9 @@ pub struct LiteParsePageComplexity {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseTextItem {
-    pub text: LiteParseByteView,
-    pub font_name: LiteParseByteView,
-    pub link: LiteParseByteView,
+    pub text: LiteParseStr,
+    pub font_name: LiteParseStr,
+    pub link: LiteParseStr,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -356,7 +358,7 @@ pub struct LiteParseTextItem {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseWordBox {
-    pub text: LiteParseByteView,
+    pub text: LiteParseStr,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -387,8 +389,8 @@ pub struct LiteParseGraphic {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseStructNode {
-    pub role: LiteParseByteView,
-    pub alt_text: LiteParseByteView,
+    pub role: LiteParseStr,
+    pub alt_text: LiteParseStr,
     pub bbox: LiteParseRect,
     pub mcid_offset: u32,
     pub mcid_count: u32,
@@ -400,8 +402,8 @@ pub struct LiteParseStructNode {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseImageRef {
-    pub id: LiteParseByteView,
-    pub format: LiteParseByteView,
+    pub id: LiteParseStr,
+    pub format: LiteParseStr,
     pub bbox: LiteParseRect,
     pub obj_index: u32,
     pub pixel_width: u32,
@@ -416,11 +418,11 @@ pub struct LiteParseImageRef {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseImage {
-    pub id: LiteParseByteView,
-    pub name: LiteParseByteView,
-    pub path: LiteParseByteView,
-    pub format: LiteParseByteView,
-    pub duplicate_of: LiteParseByteView,
+    pub id: LiteParseStr,
+    pub name: LiteParseStr,
+    pub path: LiteParseStr,
+    pub format: LiteParseStr,
+    pub duplicate_of: LiteParseStr,
     pub bytes: LiteParseByteView,
     pub bbox: LiteParseRect,
     pub page: u32,
@@ -434,12 +436,12 @@ pub struct LiteParseImage {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseAnnotation {
-    pub subtype: LiteParseByteView,
-    pub contents: LiteParseByteView,
-    pub created: LiteParseByteView,
-    pub modified: LiteParseByteView,
-    pub title: LiteParseByteView,
-    pub uri: LiteParseByteView,
+    pub subtype: LiteParseStr,
+    pub contents: LiteParseStr,
+    pub created: LiteParseStr,
+    pub modified: LiteParseStr,
+    pub title: LiteParseStr,
+    pub uri: LiteParseStr,
     pub rect: LiteParseRect,
     pub quadpoint_offset: u32,
     pub quadpoint_count: u32,
@@ -451,12 +453,12 @@ pub struct LiteParseAnnotation {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseFormField {
-    pub id: LiteParseByteView,
-    pub field_type: LiteParseByteView,
-    pub name: LiteParseByteView,
-    pub alternate_name: LiteParseByteView,
-    pub value: LiteParseByteView,
-    pub export_value: LiteParseByteView,
+    pub id: LiteParseStr,
+    pub field_type: LiteParseStr,
+    pub name: LiteParseStr,
+    pub alternate_name: LiteParseStr,
+    pub value: LiteParseStr,
+    pub export_value: LiteParseStr,
     pub rect: LiteParseRect,
     pub page: u32,
     pub annotation_index: i32,
@@ -480,11 +482,11 @@ pub struct LiteParseFormField {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseStructureNode {
-    pub element_type: LiteParseByteView,
-    pub id: LiteParseByteView,
-    pub actual_text: LiteParseByteView,
-    pub alt_text: LiteParseByteView,
-    pub title: LiteParseByteView,
+    pub element_type: LiteParseStr,
+    pub id: LiteParseStr,
+    pub actual_text: LiteParseStr,
+    pub alt_text: LiteParseStr,
+    pub title: LiteParseStr,
     pub parent_index: u32,
     /// Nesting depth, 0 for roots.
     pub depth: u32,
@@ -500,8 +502,8 @@ pub struct LiteParseStructureNode {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseStructureAttribute {
-    pub name: LiteParseByteView,
-    pub string: LiteParseByteView,
+    pub name: LiteParseStr,
+    pub string: LiteParseStr,
     /// `LITEPARSE_STRUCTURE_ATTR_*`.
     pub kind: u32,
     pub number: f32,
@@ -516,12 +518,12 @@ pub struct LiteParseStructureAttribute {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseLayoutBlock {
-    pub text: LiteParseByteView,
-    pub marker: LiteParseByteView,
-    pub lang: LiteParseByteView,
+    pub text: LiteParseStr,
+    pub marker: LiteParseStr,
+    pub lang: LiteParseStr,
     /// Figure image id and encoded format.
-    pub id: LiteParseByteView,
-    pub format: LiteParseByteView,
+    pub id: LiteParseStr,
+    pub format: LiteParseStr,
     pub bbox: LiteParseRect,
     /// `LITEPARSE_BLOCK_*`.
     pub kind: u32,
@@ -541,7 +543,7 @@ pub struct LiteParseLayoutBlock {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseLayoutCell {
-    pub text: LiteParseByteView,
+    pub text: LiteParseStr,
     pub bbox: LiteParseRect,
     /// Merge span; `0` or `1` means a single cell.
     pub colspan: u32,
@@ -587,7 +589,7 @@ pub struct LiteParseVectorLine {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseOutlineEntry {
-    pub title: LiteParseByteView,
+    pub title: LiteParseStr,
     pub page_index: i32,
     pub y_pdf: f32,
     /// Hierarchy depth, 1-based.
@@ -599,7 +601,7 @@ pub struct LiteParseOutlineEntry {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParsePageError {
-    pub message: LiteParseByteView,
+    pub message: LiteParseStr,
     pub page_number: u32,
 }
 
@@ -607,27 +609,27 @@ pub struct LiteParsePageError {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseXfaPacket {
-    pub name: LiteParseByteView,
-    pub content: LiteParseByteView,
+    pub name: LiteParseStr,
+    pub content: LiteParseStr,
     pub index: u32,
     pub content_length: u32,
     /// `LITEPARSE_XFA_FLAG_*` bits.
     pub flags: u32,
 }
 
-/// Document metadata. Absent strings are null views; scalars use flags.
+/// Document metadata. Absent strings are empty; scalars use flags.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseDocumentMeta {
     /// Authored `/Info` values read at document open.
-    pub title: LiteParseByteView,
-    pub author: LiteParseByteView,
-    pub subject: LiteParseByteView,
-    pub keywords: LiteParseByteView,
-    pub trapped: LiteParseByteView,
-    pub creation_date: LiteParseByteView,
-    pub mod_date: LiteParseByteView,
-    pub xmp: LiteParseByteView,
+    pub title: LiteParseStr,
+    pub author: LiteParseStr,
+    pub subject: LiteParseStr,
+    pub keywords: LiteParseStr,
+    pub trapped: LiteParseStr,
+    pub creation_date: LiteParseStr,
+    pub mod_date: LiteParseStr,
+    pub xmp: LiteParseStr,
     pub permissions: u64,
     pub raw_file_size: u64,
     pub file_version: i32,
@@ -679,8 +681,8 @@ pub struct LiteParseScreenshotRect {
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseProjectedLine {
-    pub text: LiteParseByteView,
-    pub dominant_font_name: LiteParseByteView,
+    pub text: LiteParseStr,
+    pub dominant_font_name: LiteParseStr,
     pub bbox: LiteParseRect,
     pub indent_x: f32,
     pub dominant_font_size: f32,
@@ -733,10 +735,10 @@ pub struct LiteParsePage {
     /// Viewport size in 72-DPI points.
     pub width: f32,
     pub height: f32,
-    /// The PDF `/PageLabels` entry, or a null view.
-    pub label: LiteParseByteView,
-    pub text: LiteParseByteView,
-    pub markdown: LiteParseByteView,
+    /// The PDF `/PageLabels` entry, or empty.
+    pub label: LiteParseStr,
+    pub text: LiteParseStr,
+    pub markdown: LiteParseStr,
     pub geometry: LiteParsePageGeometry,
     pub content_bounds: LiteParseRect,
     pub complexity: LiteParsePageComplexity,
@@ -975,10 +977,10 @@ impl From<&LiteParsePageComplexity> for PageComplexityStats {
     }
 }
 
-impl From<&WordBox> for LiteParseWordBox {
-    fn from(word: &WordBox) -> Self {
+impl LiteParseWordBox {
+    pub(crate) fn pack(pool: &mut Pool, word: &WordBox) -> Self {
         Self {
-            text: bytes_view(word.text.as_bytes()),
+            text: pool.push(&word.text),
             x: word.x,
             y: word.y,
             width: word.width,
@@ -987,11 +989,11 @@ impl From<&WordBox> for LiteParseWordBox {
     }
 }
 
-impl From<&ImageRef> for LiteParseImageRef {
-    fn from(image: &ImageRef) -> Self {
+impl LiteParseImageRef {
+    pub(crate) fn pack(pool: &mut Pool, image: &ImageRef) -> Self {
         Self {
-            id: bytes_view(image.id.as_bytes()),
-            format: bytes_view(image.format.as_bytes()),
+            id: pool.push(&image.id),
+            format: pool.push(&image.format),
             bbox: LiteParseRect::from(&image.bbox),
             obj_index: clamp_u32(image.obj_index),
             pixel_width: image.pixel_width,
@@ -1003,14 +1005,14 @@ impl From<&ImageRef> for LiteParseImageRef {
     }
 }
 
-impl From<&ExtractedImage> for LiteParseImage {
-    fn from(image: &ExtractedImage) -> Self {
+impl LiteParseImage {
+    pub(crate) fn pack(pool: &mut Pool, image: &ExtractedImage) -> Self {
         Self {
-            id: bytes_view(image.id.as_bytes()),
-            name: bytes_view(image.name.as_bytes()),
-            path: optional_str_view(image.path.as_deref()),
-            format: bytes_view(image.format.as_bytes()),
-            duplicate_of: optional_str_view(image.duplicate_of.as_deref()),
+            id: pool.push(&image.id),
+            name: pool.push(&image.name),
+            path: pool.push_opt(image.path.as_deref()),
+            format: pool.push(&image.format),
+            duplicate_of: pool.push_opt(image.duplicate_of.as_deref()),
             bytes: bytes_view(&image.bytes),
             bbox: LiteParseRect::from(&image.bbox),
             page: image.page,
@@ -1040,11 +1042,11 @@ impl From<&ScreenshotRect> for LiteParseScreenshotRect {
     }
 }
 
-impl From<&OutlineTarget> for LiteParseOutlineEntry {
-    fn from(entry: &OutlineTarget) -> Self {
+impl LiteParseOutlineEntry {
+    pub(crate) fn pack(pool: &mut Pool, entry: &OutlineTarget) -> Self {
         let (y_pdf, has_y_pdf) = optional(entry.y_pdf);
         Self {
-            title: bytes_view(entry.title.as_bytes()),
+            title: pool.push(&entry.title),
             page_index: entry.page_index,
             y_pdf,
             level: u32::from(entry.level),
@@ -1053,20 +1055,20 @@ impl From<&OutlineTarget> for LiteParseOutlineEntry {
     }
 }
 
-impl From<&PageError> for LiteParsePageError {
-    fn from(error: &PageError) -> Self {
+impl LiteParsePageError {
+    pub(crate) fn pack(pool: &mut Pool, error: &PageError) -> Self {
         Self {
-            message: bytes_view(error.message.as_bytes()),
+            message: pool.push(&error.message),
             page_number: error.page_number,
         }
     }
 }
 
-impl From<&XfaPacket> for LiteParseXfaPacket {
-    fn from(packet: &XfaPacket) -> Self {
+impl LiteParseXfaPacket {
+    pub(crate) fn pack(pool: &mut Pool, packet: &XfaPacket) -> Self {
         Self {
-            name: optional_str_view(packet.name.as_deref()),
-            content: optional_str_view(packet.content.as_deref()),
+            name: pool.push_opt(packet.name.as_deref()),
+            content: pool.push_opt(packet.content.as_deref()),
             index: packet.index,
             content_length: packet.content_length,
             flags: flag_bits(&[(packet.content.is_some(), LITEPARSE_XFA_FLAG_HAS_CONTENT)]),
@@ -1086,7 +1088,11 @@ pub(crate) struct DescriptiveInfo {
 }
 
 impl LiteParseDocumentMeta {
-    pub(crate) fn build(meta: &DocumentMetadata, descriptive: Option<&DescriptiveInfo>) -> Self {
+    pub(crate) fn pack(
+        pool: &mut Pool,
+        meta: &DocumentMetadata,
+        descriptive: Option<&DescriptiveInfo>,
+    ) -> Self {
         let (file_version, has_file_version) = optional(meta.file_version);
         let (security_handler_revision, has_shr) = optional(meta.security_handler_revision);
         let (permissions, has_permissions) = optional(meta.permissions);
@@ -1094,9 +1100,14 @@ impl LiteParseDocumentMeta {
         let (startxref_count, has_startxref) = optional(meta.startxref_count);
         let (raw_file_size, has_raw_file_size) = optional(meta.raw_file_size);
         let (signature_count, has_signature_count) = optional(meta.signature_count);
-        let describe = |pick: fn(&DescriptiveInfo) -> &Option<String>| {
-            optional_str_view(descriptive.and_then(|info| pick(info).as_deref()))
+        let mut describe = |pick: fn(&DescriptiveInfo) -> &Option<String>| {
+            pool.push_opt(descriptive.and_then(|info| pick(info).as_deref()))
         };
+        let title = describe(|info| &info.title);
+        let author = describe(|info| &info.author);
+        let subject = describe(|info| &info.subject);
+        let keywords = describe(|info| &info.keywords);
+        let trapped = describe(|info| &info.trapped);
         let flags = flag_bits(&[
             (has_file_version, LITEPARSE_DOC_META_FLAG_HAS_FILE_VERSION),
             (
@@ -1145,14 +1156,14 @@ impl LiteParseDocumentMeta {
             ),
         ]);
         Self {
-            title: describe(|info| &info.title),
-            author: describe(|info| &info.author),
-            subject: describe(|info| &info.subject),
-            keywords: describe(|info| &info.keywords),
-            trapped: describe(|info| &info.trapped),
-            creation_date: optional_str_view(meta.creation_date.as_deref()),
-            mod_date: optional_str_view(meta.mod_date.as_deref()),
-            xmp: optional_str_view(meta.xmp.as_deref()),
+            title,
+            author,
+            subject,
+            keywords,
+            trapped,
+            creation_date: pool.push_opt(meta.creation_date.as_deref()),
+            mod_date: pool.push_opt(meta.mod_date.as_deref()),
+            xmp: pool.push_opt(meta.xmp.as_deref()),
             permissions,
             raw_file_size,
             file_version,
@@ -1166,15 +1177,19 @@ impl LiteParseDocumentMeta {
 }
 
 impl LiteParseAnnotation {
-    pub(crate) fn pack(annotation: &DocumentAnnotation, quadpoint_offset: u32) -> Self {
+    pub(crate) fn pack(
+        pool: &mut Pool,
+        annotation: &DocumentAnnotation,
+        quadpoint_offset: u32,
+    ) -> Self {
         let (rect, has_rect) = optional_rect(annotation.rect.as_ref());
         Self {
-            subtype: bytes_view(annotation.subtype.as_bytes()),
-            contents: optional_str_view(annotation.contents.as_deref()),
-            created: optional_str_view(annotation.created.as_deref()),
-            modified: optional_str_view(annotation.modified.as_deref()),
-            title: optional_str_view(annotation.title.as_deref()),
-            uri: optional_str_view(annotation.uri.as_deref()),
+            subtype: pool.push(&annotation.subtype),
+            contents: pool.push_opt(annotation.contents.as_deref()),
+            created: pool.push_opt(annotation.created.as_deref()),
+            modified: pool.push_opt(annotation.modified.as_deref()),
+            title: pool.push_opt(annotation.title.as_deref()),
+            uri: pool.push_opt(annotation.uri.as_deref()),
             rect,
             quadpoint_offset,
             quadpoint_count: clamp_u32(annotation.quadpoint_rects.len()),
@@ -1184,18 +1199,23 @@ impl LiteParseAnnotation {
 }
 
 impl LiteParseFormField {
-    pub(crate) fn pack(field: &FormField, option_offset: u32, selected_option_offset: u32) -> Self {
+    pub(crate) fn pack(
+        pool: &mut Pool,
+        field: &FormField,
+        option_offset: u32,
+        selected_option_offset: u32,
+    ) -> Self {
         let (object_number, has_object_number) = optional(field.object_number);
         let (control_count, has_control_count) = optional(field.control_count);
         let (control_index, has_control_index) = optional(field.control_index);
         let (rect, has_rect) = optional_rect(field.rect.as_ref());
         Self {
-            id: bytes_view(field.id.as_bytes()),
-            field_type: bytes_view(field.field_type.as_bytes()),
-            name: optional_str_view(field.name.as_deref()),
-            alternate_name: optional_str_view(field.alternate_name.as_deref()),
-            value: optional_str_view(field.value.as_deref()),
-            export_value: optional_str_view(field.export_value.as_deref()),
+            id: pool.push(&field.id),
+            field_type: pool.push(&field.field_type),
+            name: pool.push_opt(field.name.as_deref()),
+            alternate_name: pool.push_opt(field.alternate_name.as_deref()),
+            value: pool.push_opt(field.value.as_deref()),
+            export_value: pool.push_opt(field.export_value.as_deref()),
             rect,
             page: field.page,
             annotation_index: field.annotation_index,
@@ -1236,6 +1256,7 @@ impl LiteParseFormField {
 }
 
 pub(crate) fn structure_attribute(
+    pool: &mut Pool,
     name: &str,
     value: &StructureAttributeValue,
 ) -> LiteParseStructureAttribute {
@@ -1243,31 +1264,29 @@ pub(crate) fn structure_attribute(
         StructureAttributeValue::Boolean(value) => (
             LITEPARSE_STRUCTURE_ATTR_BOOL,
             f32::from(u8::from(*value)),
-            LiteParseByteView::default(),
+            LiteParseStr::default(),
         ),
         StructureAttributeValue::Number(value) => (
             LITEPARSE_STRUCTURE_ATTR_NUMBER,
             *value,
-            LiteParseByteView::default(),
+            LiteParseStr::default(),
         ),
-        StructureAttributeValue::String(value) => (
-            LITEPARSE_STRUCTURE_ATTR_STRING,
-            0.0,
-            bytes_view(value.as_bytes()),
-        ),
+        StructureAttributeValue::String(value) => {
+            (LITEPARSE_STRUCTURE_ATTR_STRING, 0.0, pool.push(value))
+        }
     };
     LiteParseStructureAttribute {
-        name: bytes_view(name.as_bytes()),
+        name: pool.push(name),
         string,
         kind,
         number,
     }
 }
 
-pub(crate) fn layout_cell(cell: &LayoutCell) -> LiteParseLayoutCell {
+pub(crate) fn layout_cell(pool: &mut Pool, cell: &LayoutCell) -> LiteParseLayoutCell {
     let (bbox, has_bbox) = optional_rect(cell.bbox.as_ref());
     LiteParseLayoutCell {
-        text: bytes_view(cell.text.as_bytes()),
+        text: pool.push(&cell.text),
         bbox,
         colspan: u32::from(cell.colspan.unwrap_or(0)),
         rowspan: u32::from(cell.rowspan.unwrap_or(0)),
@@ -1373,6 +1392,15 @@ impl From<&LiteParseVectorLine> for VectorLine {
 
 pub(crate) fn views<'a, C, V: From<&'a C>>(items: &'a [C]) -> Vec<V> {
     items.iter().map(V::from).collect()
+}
+
+/// Pack every item through the pool.
+pub(crate) fn pack_all<'a, C, V>(
+    pool: &mut Pool,
+    items: &'a [C],
+    pack: fn(&mut Pool, &'a C) -> V,
+) -> Vec<V> {
+    items.iter().map(|item| pack(pool, item)).collect()
 }
 
 #[cfg(test)]

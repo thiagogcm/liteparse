@@ -2,7 +2,7 @@ use liteparse_pdfium::{BitmapFormat, Color, Library, PageObject, PageObjectKind,
 
 use crate::document::DocumentState;
 use crate::handle::{
-    LiteParseByteView, array_ptr, bytes_view, free_handle, opaque_handles, optional_str_view,
+    LiteParseByteView, LiteParseStr, Pool, array_ptr, bytes_view, free_handle, opaque_handles,
     packed_len, view_of, view_state,
 };
 use crate::records::{LiteParsePageGeometry, flag_bits};
@@ -104,7 +104,7 @@ pub struct LiteParsePdfBounds {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParsePageObjectPage {
-    pub label: LiteParseByteView,
+    pub label: LiteParseStr,
     pub geometry: LiteParsePageGeometry,
     pub page_number: u32,
     /// `LITEPARSE_OBJECT_PAGE_FLAG_*` bits.
@@ -171,13 +171,16 @@ pub struct LiteParsePageObject {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LiteParsePageObjectsView {
+    /// String pool behind every `LiteParseStr` in this view.
+    pub pool: *const u8,
+    pub pool_len: usize,
     pub pages: *const LiteParsePageObjectPage,
     pub pages_len: usize,
     pub objects: *const LiteParsePageObject,
     pub objects_len: usize,
     pub segments: *const LiteParsePathSegment,
     pub segments_len: usize,
-    pub filters: *const LiteParseByteView,
+    pub filters: *const LiteParseStr,
     pub filters_len: usize,
 }
 
@@ -201,10 +204,12 @@ struct OwnedPage {
 }
 
 pub(crate) struct PageObjectsState {
-    /// Owns the strings and image payloads the records borrow.
+    /// Owns the image payloads the records borrow.
     #[allow(dead_code)]
     source: (Vec<OwnedPage>, Vec<OwnedObject>),
     /// Backing storage for `view`.
+    #[allow(dead_code)]
+    pool: Pool,
     #[allow(dead_code)]
     pages: Vec<LiteParsePageObjectPage>,
     #[allow(dead_code)]
@@ -212,7 +217,7 @@ pub(crate) struct PageObjectsState {
     #[allow(dead_code)]
     segments: Vec<LiteParsePathSegment>,
     #[allow(dead_code)]
-    filters: Vec<LiteParseByteView>,
+    filters: Vec<LiteParseStr>,
     view: LiteParsePageObjectsView,
 }
 
@@ -220,6 +225,7 @@ view_state!(PageObjectsState => LiteParsePageObjectsView, view);
 
 impl PageObjectsState {
     fn pack(owned_pages: Vec<OwnedPage>, owned_objects: Vec<OwnedObject>) -> Self {
+        let mut pool = Pool::default();
         let mut segments = Vec::new();
         let mut filters = Vec::new();
         let mut objects = Vec::with_capacity(owned_objects.len());
@@ -227,12 +233,7 @@ impl PageObjectsState {
             let segment_offset = segments.len();
             segments.extend_from_slice(&object.segments);
             let filter_offset = filters.len();
-            filters.extend(
-                object
-                    .filters
-                    .iter()
-                    .map(|name| bytes_view(name.as_bytes())),
-            );
+            filters.extend(object.filters.iter().map(|name| pool.push(name)));
             let payload = |bytes: &Vec<u8>| {
                 if bytes.is_empty() {
                     LiteParseByteView::default()
@@ -256,7 +257,7 @@ impl PageObjectsState {
             .map(|page| {
                 let (geometry, has_rotation) = page.geometry.unwrap_or_default();
                 LiteParsePageObjectPage {
-                    label: optional_str_view(page.page_label.as_deref()),
+                    label: pool.push_opt(page.page_label.as_deref()),
                     geometry,
                     page_number: page.page_number,
                     flags: flag_bits(&[
@@ -274,6 +275,8 @@ impl PageObjectsState {
             })
             .collect();
         let view = LiteParsePageObjectsView {
+            pool: pool.ptr(),
+            pool_len: pool.len(),
             pages: array_ptr(&pages),
             pages_len: pages.len(),
             objects: array_ptr(&objects),
@@ -285,6 +288,7 @@ impl PageObjectsState {
         };
         Self {
             source: (owned_pages, owned_objects),
+            pool,
             pages,
             objects,
             segments,

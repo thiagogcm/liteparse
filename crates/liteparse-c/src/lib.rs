@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
+pub mod abi;
 pub mod complexity;
 pub mod config;
 pub mod content;
@@ -19,11 +20,12 @@ mod runtime;
 pub mod screenshots;
 pub mod status;
 
+pub use abi::*;
 pub use complexity::*;
 pub use config::*;
 pub use content::*;
 pub use document::*;
-pub use handle::LiteParseByteView;
+pub use handle::{LiteParseByteView, LiteParseStr};
 pub use ocr::*;
 pub use page_objects::*;
 pub use parser::*;

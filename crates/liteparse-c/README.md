@@ -41,9 +41,9 @@ cbindgen --config crates/liteparse-c/cbindgen.toml \
 #include <string.h>
 #include "liteparse.h"
 
-static LiteParseByteView cstr(const char *s) {
-  LiteParseByteView view = {(const uint8_t *)s, strlen(s)};
-  return view;
+/* Every output string is NUL-terminated inside the view's pool. */
+static const char *str(const uint8_t *pool, LiteParseStr s) {
+  return (const char *)pool + s.offset;
 }
 
 int main(void) {
@@ -52,27 +52,32 @@ int main(void) {
   config.bools_set = LITEPARSE_FLAG_QUIET;
   config.bools_values = LITEPARSE_FLAG_QUIET;
 
+  const char *path = "document.pdf";
   LiteParseParser *parser = NULL;
   LiteParseDocument *document = NULL;
   LiteParseResult *result = NULL;
   LiteParseStatus status = liteparse_parser_new(&config, &parser);
   if (status == LITEPARSE_STATUS_OK) {
-    status = liteparse_document_open_path(parser, cstr("document.pdf"), &document);
+    status = liteparse_document_open_path(parser, (const uint8_t *)path, strlen(path),
+                                          &document);
   }
   if (status == LITEPARSE_STATUS_OK) {
     status = liteparse_document_parse(document, NULL, 0, &result);
   }
   if (status == LITEPARSE_STATUS_OK) {
     const LiteParseResultView *view = liteparse_result_view(result);
-    fwrite(view->text.ptr, 1, view->text.len, stdout);
+    const uint8_t *pool = view->content.pool;
+    fputs(str(pool, view->text), stdout);
     for (size_t i = 0; i < view->content.pages_len; i++) {
       const LiteParsePage *page = &view->content.pages[i];
       const LiteParseTextItem *items = view->content.items + page->item_offset;
-      printf("page %u: %u items\n", page->page_number, page->item_count);
-      (void)items;
+      printf("page %u (%s): %u items\n", page->page_number, str(pool, page->label),
+             page->item_count);
+      if (page->item_count > 0) printf("  first: %s\n", str(pool, items[0].text));
     }
   } else {
-    LiteParseByteView error = liteparse_last_error();
+    LiteParseByteView error;
+    liteparse_last_error(&error);
     fprintf(stderr, "%.*s\n", (int)error.len, (const char *)error.ptr);
   }
 
@@ -98,31 +103,55 @@ as `LiteParsePage`, `LiteParseTextItem`, `LiteParseAnnotation`), **views**
 (`LiteParseContent`, `LiteParseResultView`, and the other `*View` and
 `*Info` structs, which hold the array pointers and lengths), and **inputs**
 (`LiteParseConfig`, `LiteParseContent`, `LiteParseRenderRegion`,
-`LiteParseOcrWord`). `LiteParseByteView` is the one pointer-carrying value
-that records embed.
+`LiteParseOcrWord`). The layout is designed to be read by hosted runtimes
+(Java FFM, .NET, Go) without helper code: records hold no pointers, and a
+whole result can be copied out of the handle with one `memcpy` per array.
 
-- **Records are packed.** Every record is `repr(C)` and holds only
-  fixed-width scalars, nested records, and `LiteParseByteView`s. There are
-  no `bool` or `size_t` fields and no pointers other than byte views.
-  Optional values and boolean properties are bits in the record's `flags`
-  (`LITEPARSE_<RECORD>_FLAG_HAS_*`, `LITEPARSE_<RECORD>_FLAG_*`).
+- **Records are packed and pointer-free.** Every record is `repr(C)` and
+  holds only fixed-width scalars, nested records, and `LiteParseStr`
+  ranges. There are no `bool` or `size_t` fields. The only exception is the
+  `LiteParseByteView` carrying a binary payload (`LiteParseImage.bytes`,
+  `LiteParseScreenshot.png`, `LiteParsePageObject.image_*`), which borrows
+  from the handle. Optional values and boolean properties are bits in the
+  record's `flags` (`LITEPARSE_<RECORD>_FLAG_HAS_*`,
+  `LITEPARSE_<RECORD>_FLAG_*`).
 - **Collections are flat arrays with ranges.** A handle owns one flat array
   per record type; parents carry `uint32_t` `x_offset`/`x_count` pairs into
   it. Index fields such as `parent_index` are absolute within their array,
   with `LITEPARSE_NO_PARENT` for roots.
+- **Strings live in a pool.** Every view that carries text has a
+  `pool`/`pool_len` byte array, and every string in its records and scalars
+  is a `LiteParseStr {offset, len}` into that pool (`LiteParseResultView`
+  strings index `content.pool`). Output pools start with a NUL byte and
+  NUL-terminate every string, so `pool + offset` is a valid C string and
+  `{0, 0}` reads as `""`. Absent and empty strings are both `len == 0`.
+  Input pools (`liteparse_parser_parse_content`) need only the ranges to be
+  in bounds and valid UTF-8. Offsets are unsigned 32-bit: a pool is at most
+  4 GiB.
 - **One view per handle.** `liteparse_<handle>_view` returns a pointer to a
   struct of `{ptr, len}` array pairs and scalars. It is borrowed from the
   handle, valid until the matching `*_free`, and null for a null handle.
-  Empty arrays are a null pointer with zero length.
-- **Strings and byte buffers** are `LiteParseByteView`s: borrowed,
-  non-NUL-terminated UTF-8 (or raw bytes for PNG and image payloads). Absent
-  and empty are both a null pointer with zero length. Colors are packed ARGB
-  `uint32_t`. Enumerations are `uint32_t` constants.
+  Empty arrays are a null pointer with zero length. Because records are
+  pointer-free, copying the arrays and the pool out of the view and then
+  freeing the handle leaves a fully readable result.
+- **Byte buffers** are `LiteParseByteView`s: borrowed raw bytes (PNG and
+  image payloads, JSON, the version and error strings). Absent and empty are
+  both a null pointer with zero length. Colors are packed ARGB `uint32_t`.
+  Enumerations are `uint32_t` constants.
+- **Function arguments** never pass structs by value: caller strings are
+  `(const uint8_t *, size_t)` pairs, not NUL-terminated, and everything
+  else is a pointer, scalar, or out pointer.
 - **Creation** takes an out pointer and returns a `LiteParseStatus`; the out
-  pointer receives null on failure. `liteparse_last_error()` then returns a
-  thread-local message valid until the next failed call on the same thread.
-  `LITEPARSE_STATUS_PANIC` means a Rust panic was caught at the boundary:
-  free the handle involved and do not reuse it.
+  pointer receives null on failure. `liteparse_last_error(&view)` then
+  yields a thread-local message valid until the next failed call on the
+  same thread: read it on the thread that made the failing call, before any
+  other call that may fail. `LITEPARSE_STATUS_PANIC` means a Rust panic was
+  caught at the boundary: free the handle involved and do not reuse it.
+- **ABI introspection.** `LITEPARSE_ABI_VERSION` / `liteparse_abi_version()`
+  change together whenever an exported struct, constant, or signature
+  changes incompatibly. `liteparse_sizeof(LITEPARSE_TYPE_*)` reports the
+  size of every exported struct so a binding that declares layouts by hand
+  can assert them at load time.
 - **Configuration** starts with `liteparse_config_init` and sets only what it
   needs. Core booleans use a bit in `bools_set` plus its value in
   `bools_values`; `LITEPARSE_UNSET` keeps the native default in `u32`
@@ -131,7 +160,32 @@ that records embed.
   during `liteparse_parser_new`.
 - **Threads.** Parser and document handles may be used from several threads
   at once, including `liteparse_parser_set_ocr_callback`; destruction must
-  wait for in-flight operations.
+  wait for in-flight operations. Every operation blocks its calling thread
+  for the whole parse; a runtime with green threads (Java virtual threads)
+  should run them on a dedicated platform-thread executor rather than pin
+  its carriers.
+
+## Consuming from Java FFM
+
+The layout is arranged so a hand-written or jextract-generated binding
+needs no per-string native calls:
+
+1. Assert `liteparse_abi_version() == LITEPARSE_ABI_VERSION` and, for each
+   hand-declared `StructLayout`, `layout.byteSize() ==
+   liteparse_sizeof(LITEPARSE_TYPE_*)` once at class initialisation.
+2. Pass caller strings as `(MemorySegment, long)` from an arena; no struct
+   needs to be allocated to call any function.
+3. After `liteparse_document_parse`, read `liteparse_result_view` once,
+   `MemorySegment.copy` the arrays you need and `content.pool` into heap
+   segments (or `byte[]`s), then `liteparse_result_free` immediately. The
+   copied records stay valid because they contain only offsets. Strings
+   decode as `new String(pool, offset, len, UTF_8)`.
+4. Binary payloads (`png`, image `bytes`, page-object `image_*`) are the one
+   thing to copy before freeing; they are `LiteParseByteView`s into the
+   handle.
+5. For `liteparse_parser_parse_content`, build one pool `byte[]`, record each
+   string's offset and length as you append, and pass the pool with the
+   record arrays; the library copies everything during the call.
 
 ## Results
 
@@ -147,6 +201,8 @@ rects, item frames, projected lines and spans, and the XY-cut region tree.
 text, Markdown (under `LITEPARSE_OUTPUT_FORMAT_MARKDOWN`), geometry (visible
 box, user unit, rotation), content bounds, and inline complexity. Its
 `HAS_*` flags distinguish "extraction enabled, none found" from "disabled".
+All of its strings, like every string in the result, are `LiteParseStr`
+ranges into `content.pool`.
 
 Text metadata (font metrics, colors, char codes, marked-content ids) is
 always exported when the core holds it; `LITEPARSE_RESULT_FLAG_TEXT_METADATA`
@@ -194,8 +250,11 @@ no conversion, PDFium, screenshots, or OCR. Start from
 exposes; every view and array is copied during the call.
 
 ```c
+static const char pool[] = "hello";  /* input pools need no NUL bytes */
+
 LiteParseTextItem item = {0};
-item.text = cstr("hello");
+item.text.offset = 0;
+item.text.len = 5;
 item.x = 72.0f;
 item.y = 100.0f;
 item.width = 80.0f;
@@ -209,6 +268,8 @@ page.item_count = 1;
 
 LiteParseContent content;
 liteparse_content_init(&content);
+content.pool = (const uint8_t *)pool;
+content.pool_len = sizeof pool - 1;
 content.pages = &page;
 content.pages_len = 1;
 content.items = &item;
@@ -223,8 +284,9 @@ range makes those blocks the Markdown structure, including `merged_table`
 cells with `colspan`/`rowspan`; `images` and per-page complexity are
 forwarded on that path. Annotations, form fields, structure trees (absolute
 `parent_index`, parents first), vector graphics, and content bounds are
-accepted when the page's `HAS_*` flag is set. Unknown `flags` bits and
-non-finite floats in any record are `LITEPARSE_STATUS_INVALID_ARGUMENT`.
+accepted when the page's `HAS_*` flag is set. Unknown `flags` bits,
+non-finite floats, and string ranges outside `pool` or not valid UTF-8 in
+any record are `LITEPARSE_STATUS_INVALID_ARGUMENT`.
 `max_pages` truncates the
 supplied list and drops document-level blocks when it does. `crop_box` and
 `skip_diagonal_text` apply before projection, matching `document_parse`.
@@ -235,7 +297,7 @@ supplied list and drops document-level blocks when it does. `crop_box` and
 callback receives a `LiteParseOcrImage` (RGB, or grayscale when registered
 with `LITEPARSE_OCR_FLAG_PREFERS_GRAYSCALE`) and submits `LiteParseOcrWord`s
 through `liteparse_ocr_sink_add`; on failure it records a message with
-`liteparse_ocr_sink_set_error` and returns nonzero. It may run concurrently
+`liteparse_ocr_sink_set_error(sink, bytes, len)` and returns nonzero. It may run concurrently
 on worker threads and must be thread-safe, non-unwinding, and valid for the
 parser's lifetime. Documents opened before a callback change keep the engine
 they were opened with.

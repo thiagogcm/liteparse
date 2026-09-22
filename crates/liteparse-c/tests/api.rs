@@ -137,6 +137,86 @@ fn check_view(view: LiteParseByteView) {
     );
 }
 
+/// Anything that carries a string pool.
+trait Pooled {
+    fn pool(&self) -> &[u8];
+}
+
+impl Pooled for LiteParseContent {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
+impl Pooled for LiteParseResultView {
+    fn pool(&self) -> &[u8] {
+        self.content.pool()
+    }
+}
+
+impl Pooled for LiteParseSearchView {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
+impl Pooled for LiteParseRawTextView {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
+impl Pooled for LiteParsePageObjectsView {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
+impl Pooled for LiteParseDocumentInfo {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
+/// Read a pooled string, checking its range and NUL terminator.
+fn pooled(owner: &impl Pooled, value: LiteParseStr) -> String {
+    let pool = owner.pool();
+    let start = value.offset as usize;
+    let end = start + value.len as usize;
+    assert!(
+        end < pool.len(),
+        "string {start}..{end} outside pool of {}",
+        pool.len()
+    );
+    assert_eq!(pool[end], 0, "pooled strings are NUL-terminated");
+    String::from_utf8(pool[start..end].to_vec()).expect("utf-8")
+}
+
+fn check_str(owner: &impl Pooled, value: LiteParseStr) {
+    pooled(owner, value);
+}
+
+/// Builds the caller-side pool for `liteparse_parser_parse_content`. It has
+/// no leading NUL and no terminators: input only needs the ranges.
+#[derive(Default)]
+struct TestPool(Vec<u8>);
+
+impl TestPool {
+    fn s(&mut self, text: &[u8]) -> LiteParseStr {
+        let offset = self.0.len() as u32;
+        self.0.extend_from_slice(text);
+        LiteParseStr {
+            offset,
+            len: text.len() as u32,
+        }
+    }
+
+    fn install(&self, content: &mut LiteParseContent) {
+        content.pool = self.0.as_ptr();
+        content.pool_len = self.0.len();
+    }
+}
+
 fn range<T>(items: &[T], offset: u32, count: u32) -> &[T] {
     let start = offset as usize;
     let end = start + count as usize;
@@ -149,7 +229,9 @@ fn range<T>(items: &[T], offset: u32, count: u32) -> &[T] {
 }
 
 fn last_error() -> String {
-    view_str(liteparse_last_error())
+    let mut out = LiteParseByteView::default();
+    unsafe { liteparse_last_error(&mut out) };
+    view_str(out)
 }
 
 fn last_error_contains(fragment: &str) {
@@ -201,7 +283,7 @@ impl Parser {
     fn open(&self, name: &str) -> Document {
         let path = fixture(name);
         call(
-            |out| unsafe { liteparse_document_open_path(self.0, view(path.as_bytes()), out) },
+            |out| unsafe { liteparse_document_open_path(self.0, path.as_ptr(), path.len(), out) },
             Document,
         )
         .unwrap_or_else(|status| panic!("{status}: {}", last_error()))
@@ -300,7 +382,7 @@ impl Res {
     }
 
     fn text(&self) -> String {
-        view_str(self.view().text)
+        pooled(self.view(), self.view().text)
     }
 
     fn pages(&self) -> &[LiteParsePage] {
@@ -358,9 +440,17 @@ fn check_content_ranges(content: &LiteParseContent) {
     let rows = arr(content.rows, content.rows_len);
     let shapes = arr(content.vector_shapes, content.vector_shapes_len);
     let lines = arr(content.vector_lines, content.vector_lines_len);
-    let _ = arr(content.outline, content.outline_len);
-    let _ = arr(content.page_errors, content.page_errors_len);
-    let _ = arr(content.images, content.images_len);
+    for entry in arr(content.outline, content.outline_len) {
+        check_str(content, entry.title);
+    }
+    for error in arr(content.page_errors, content.page_errors_len) {
+        check_str(content, error.message);
+    }
+    for image in arr(content.images, content.images_len) {
+        check_str(content, image.id);
+        check_str(content, image.format);
+        check_view(image.bytes);
+    }
     range(
         blocks,
         content.document_block_offset,
@@ -368,14 +458,14 @@ fn check_content_ranges(content: &LiteParseContent) {
     );
 
     for item in items {
-        check_view(item.text);
-        check_view(item.font_name);
-        check_view(item.link);
+        check_str(content, item.text);
+        check_str(content, item.font_name);
+        check_str(content, item.link);
         range(words, item.word_offset, item.word_count);
         range(char_codes, item.char_code_offset, item.char_code_count);
     }
     for string in strings {
-        check_view(*string);
+        check_str(content, *string);
     }
     for node in struct_nodes {
         range(mcids, node.mcid_offset, node.mcid_count);
@@ -444,9 +534,9 @@ fn check_content_ranges(content: &LiteParseContent) {
         }
     }
     for page in pages {
-        check_view(page.label);
-        check_view(page.text);
-        check_view(page.markdown);
+        check_str(content, page.label);
+        check_str(content, page.text);
+        check_str(content, page.markdown);
         range(items, page.item_offset, page.item_count);
         range(graphics, page.graphic_offset, page.graphic_count);
         range(
@@ -470,9 +560,13 @@ fn check_content_ranges(content: &LiteParseContent) {
 
 fn check_result_ranges(view: &LiteParseResultView) {
     check_content_ranges(&view.content);
-    check_view(view.text);
-    check_view(view.creator);
-    check_view(view.producer);
+    check_str(view, view.text);
+    check_str(view, view.creator);
+    check_str(view, view.producer);
+    for line in arr(view.projected_lines, view.projected_lines_len) {
+        check_str(view, line.text);
+        check_str(view, line.dominant_font_name);
+    }
     let content = &view.content;
     let pages = arr(content.pages, content.pages_len);
     let words = arr(content.words, content.words_len);
@@ -511,6 +605,7 @@ fn check_result_ranges(view: &LiteParseResultView) {
         );
     }
     for shot in shots {
+        check_view(shot.png);
         range(rects, shot.rect_offset, shot.rect_count);
     }
 }
@@ -519,7 +614,16 @@ fn check_result_ranges(view: &LiteParseResultView) {
 
 #[test]
 fn version_and_last_error() {
-    assert_eq!(view_str(liteparse_version()), env!("CARGO_PKG_VERSION"));
+    let mut version = LiteParseByteView::default();
+    unsafe { liteparse_version(&mut version) };
+    assert_eq!(view_str(version), env!("CARGO_PKG_VERSION"));
+    assert_eq!(liteparse_abi_version(), LITEPARSE_ABI_VERSION);
+    assert_eq!(
+        liteparse_sizeof(LITEPARSE_TYPE_CONFIG),
+        size_of::<LiteParseConfig>()
+    );
+    assert_eq!(liteparse_sizeof(LITEPARSE_TYPE_STR), 8);
+    assert_eq!(liteparse_sizeof(9999), 0);
     let mut handle = ptr::null_mut();
     assert_eq!(
         unsafe { liteparse_parser_new(ptr::null(), &mut handle) },
@@ -594,12 +698,16 @@ fn parser_new_validates_config() {
     reject(LITEPARSE_STATUS_INVALID_ARGUMENT, "UTF-8", &|c| {
         c.font_db_dir = view(&[0xff, 0xfe])
     });
-    reject(LITEPARSE_STATUS_INVALID_ARGUMENT, "length zero", &|c| {
-        c.font_db_dir = LiteParseByteView {
-            ptr: ptr::null(),
-            len: 3,
-        };
-    });
+    reject(
+        LITEPARSE_STATUS_INVALID_ARGUMENT,
+        "must not be null when",
+        &|c| {
+            c.font_db_dir = LiteParseByteView {
+                ptr: ptr::null(),
+                len: 3,
+            };
+        },
+    );
     reject(LITEPARSE_STATUS_INVALID_CONFIG, "45", &|c| {
         static BAD: [LiteParsePageOrientationCorrection; 1] =
             [LiteParsePageOrientationCorrection { page: 1, angle: 45 }];
@@ -748,8 +856,13 @@ fn result_view_is_self_consistent() {
     assert_eq!(view.total_pages, 4);
     let pages = parsed.pages();
     assert_eq!(pages.len(), 4);
-    let labels: Vec<String> = pages.iter().map(|p| view_str(p.label)).collect();
+    let labels: Vec<String> = pages.iter().map(|p| pooled(view, p.label)).collect();
     assert_eq!(labels, ["i", "ii", "1", "2"]);
+    let info = document.info();
+    assert_eq!(info.total_pages, 4);
+    for entry in arr(info.outline, info.outline_len) {
+        check_str(info, entry.title);
+    }
     for page in pages {
         assert_ne!(page.flags & LITEPARSE_PAGE_FLAG_HAS_GEOMETRY, 0);
         assert_ne!(page.flags & LITEPARSE_PAGE_FLAG_HAS_COMPLEXITY, 0);
@@ -757,8 +870,8 @@ fn result_view_is_self_consistent() {
         assert_eq!(page.flags & LITEPARSE_PAGE_FLAG_HAS_ANNOTATIONS, 0);
         assert_eq!(page.flags & LITEPARSE_PAGE_FLAG_HAS_BLOCKS, 0);
         assert!(page.width > 0.0 && page.height > 0.0);
-        assert!(!view_str(page.text).is_empty());
-        assert!(view_str(page.markdown).is_empty());
+        assert!(!pooled(view, page.text).is_empty());
+        assert!(pooled(view, page.markdown).is_empty());
     }
     let items = arr(view.content.items, view.content.items_len);
     assert!(!items.is_empty());
@@ -773,7 +886,7 @@ fn result_view_is_self_consistent() {
     let words = arr(view.content.words, view.content.words_len);
     let first = items.iter().find(|item| item.word_count > 0).unwrap();
     let word = &range(words, first.word_offset, first.word_count)[0];
-    assert!(!view_str(word.text).is_empty());
+    assert!(!pooled(view, word.text).is_empty());
     assert!(view.projected_lines_len > 0 && view.regions_len > 0);
 
     // Text metadata off: the items still carry what the core holds.
@@ -841,16 +954,17 @@ fn search_matches_outlive_the_result() {
     let parser = Parser::plain();
     let parsed = parser.open("sample.pdf").parse(&[]);
     let items = arr(parsed.view().content.items, parsed.view().content.items_len);
-    let phrase = view_str(items[0].text);
+    let phrase = pooled(parsed.view(), items[0].text);
     let mut matches = ptr::null_mut();
-    let status =
-        unsafe { liteparse_result_search(parsed.0, 0, view(phrase.as_bytes()), 0, &mut matches) };
+    let status = unsafe {
+        liteparse_result_search(parsed.0, 0, phrase.as_ptr(), phrase.len(), 0, &mut matches)
+    };
     assert_eq!(status, LITEPARSE_STATUS_OK, "{}", last_error());
     drop(parsed);
     let found = unsafe { liteparse_search_matches_view(matches).as_ref() }.unwrap();
     let hits = arr(found.items, found.items_len);
     assert!(!hits.is_empty());
-    assert!(view_str(hits[0].text).contains(&phrase));
+    assert!(pooled(found, hits[0].text).contains(&phrase));
     for hit in hits {
         range(
             arr(found.words, found.words_len),
@@ -867,11 +981,11 @@ fn search_matches_outlive_the_result() {
 
     let parsed = parser.open("sample.pdf").parse(&[]);
     assert_eq!(
-        unsafe { liteparse_result_search(parsed.0, 99, view(b"x"), 0, &mut matches) },
+        unsafe { liteparse_result_search(parsed.0, 99, b"x".as_ptr(), 1, 0, &mut matches) },
         LITEPARSE_STATUS_INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { liteparse_result_search(parsed.0, 0, view(b"x"), 1 << 5, &mut matches) },
+        unsafe { liteparse_result_search(parsed.0, 0, b"x".as_ptr(), 1, 1 << 5, &mut matches) },
         LITEPARSE_STATUS_INVALID_ARGUMENT
     );
     assert!(matches.is_null());
@@ -1023,7 +1137,7 @@ unsafe extern "C" fn recognize_failing(
     _image: *const LiteParseOcrImage,
     sink: *mut LiteParseOcrSink,
 ) -> u32 {
-    unsafe { liteparse_ocr_sink_set_error(sink, view(b"engine exploded")) };
+    unsafe { liteparse_ocr_sink_set_error(sink, b"engine exploded".as_ptr(), 15) };
     7
 }
 
@@ -1033,7 +1147,14 @@ fn ocr_parser(recognize: LiteParseOcrRecognizeFn, user_data: *mut c_void, flags:
         c.bools_values |= LITEPARSE_FLAG_OCR_ENABLED | LITEPARSE_FLAG_OCR_FAILURE_FATAL;
     });
     let status = unsafe {
-        liteparse_parser_set_ocr_callback(parser.0, recognize, user_data, view(b"test-ocr"), flags)
+        liteparse_parser_set_ocr_callback(
+            parser.0,
+            recognize,
+            user_data,
+            b"test-ocr".as_ptr(),
+            8,
+            flags,
+        )
     };
     assert_eq!(status, LITEPARSE_STATUS_OK);
     parser
@@ -1069,7 +1190,14 @@ fn ocr_callback_failure_surfaces_when_fatal() {
     last_error_contains("engine exploded");
     assert_eq!(
         unsafe {
-            liteparse_parser_set_ocr_callback(parser.0, None, ptr::null_mut(), view(b""), 1 << 3)
+            liteparse_parser_set_ocr_callback(
+                parser.0,
+                None,
+                ptr::null_mut(),
+                ptr::null(),
+                0,
+                1 << 3,
+            )
         },
         LITEPARSE_STATUS_INVALID_ARGUMENT
     );
@@ -1078,8 +1206,9 @@ fn ocr_callback_failure_surfaces_when_fatal() {
 #[test]
 fn clearing_the_ocr_callback_restores_the_default_engine_choice() {
     let parser = ocr_parser(Some(recognize_failing), ptr::null_mut(), 0);
-    let status =
-        unsafe { liteparse_parser_set_ocr_callback(parser.0, None, ptr::null_mut(), view(b""), 0) };
+    let status = unsafe {
+        liteparse_parser_set_ocr_callback(parser.0, None, ptr::null_mut(), ptr::null(), 0, 0)
+    };
     assert_eq!(status, LITEPARSE_STATUS_OK);
     // Built-in OCR availability varies, so only the removed callback is checked.
     if parser.open("sample.pdf").try_parse(&[]).is_err() {
@@ -1103,9 +1232,15 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
     let glyph_names = arr(view.glyph_names, view.glyph_names_len);
     assert_eq!(pages.len(), 4);
     assert_eq!(
-        pages.iter().map(|p| view_str(p.label)).collect::<Vec<_>>(),
+        pages
+            .iter()
+            .map(|p| pooled(view, p.label))
+            .collect::<Vec<_>>(),
         ["i", "ii", "1", "2"]
     );
+    for name in glyph_names {
+        check_str(view, *name);
+    }
     for page in pages {
         assert_ne!(page.flags & LITEPARSE_RAW_PAGE_FLAG_HAS_GEOMETRY, 0);
         let page_items = range(items, page.item_offset, page.item_count);
@@ -1113,6 +1248,8 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
         for item in page_items {
             let codes = range(char_codes, item.char_code_offset, item.char_code_count);
             assert!(!codes.is_empty());
+            assert!(!pooled(view, item.text).is_empty());
+            check_str(view, item.font_name);
             let names = range(glyph_names, item.glyph_name_offset, item.glyph_name_count);
             if item.flags & LITEPARSE_RAW_ITEM_FLAG_HAS_GLYPH_NAMES != 0 {
                 assert_eq!(names.len(), codes.len());
@@ -1130,7 +1267,10 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
     );
     let view = unsafe { liteparse_raw_text_view(handle).as_ref() }.unwrap();
     let pages = arr(view.pages, view.pages_len);
-    assert_eq!((pages.len(), view_str(pages[0].label).as_str()), (1, "1"));
+    assert_eq!(
+        (pages.len(), pooled(view, pages[0].label).as_str()),
+        (1, "1")
+    );
     unsafe { liteparse_raw_text_free(handle) };
 }
 
@@ -1167,12 +1307,12 @@ fn extract_round_trips_into_parse_content() {
     let view = extracted.view();
     check_result_ranges(view);
     assert_ne!(view.flags & LITEPARSE_RESULT_FLAG_EXTRACT_ONLY, 0);
-    assert!(view.text.ptr.is_null());
+    assert_eq!(view.text.len, 0);
     assert_eq!(view.projected_lines_len, 0);
     let pages = extracted.pages();
     assert_eq!(pages.len(), 4);
-    assert_eq!(view_str(pages[1].label), "ii");
-    assert!(view_str(pages[1].text).is_empty());
+    assert_eq!(pooled(view, pages[1].label), "ii");
+    assert!(pooled(view, pages[1].text).is_empty());
     let items = arr(view.content.items, view.content.items_len);
     assert!(items.iter().any(|item| item.word_count > 0));
     assert_eq!(
@@ -1201,15 +1341,15 @@ fn extract_round_trips_into_parse_content() {
         reprojected
             .pages()
             .iter()
-            .map(|p| view_str(p.label))
+            .map(|p| pooled(reprojected.view(), p.label))
             .collect::<Vec<_>>(),
         ["i", "ii", "1", "2"]
     );
 }
 
-fn content_item(text: &[u8], y: f32) -> LiteParseTextItem {
+fn content_item(text: LiteParseStr, y: f32) -> LiteParseTextItem {
     LiteParseTextItem {
-        text: view(text),
+        text,
         x: 72.0,
         y,
         width: 80.0,
@@ -1238,10 +1378,12 @@ fn empty_content() -> LiteParseContent {
 #[test]
 fn parse_content_projects_caller_text_without_opening_a_document() {
     let parser = Parser::plain();
-    let items = [content_item(b"hello content", 100.0)];
+    let mut pool = TestPool::default();
+    let items = [content_item(pool.s(b"hello content"), 100.0)];
     let mut page = content_page(1, 0);
-    page.label = view(b"A-1");
+    page.label = pool.s(b"A-1");
     let mut content = empty_content();
+    pool.install(&mut content);
     content.pages = &page;
     content.pages_len = 1;
     content.items = items.as_ptr();
@@ -1249,19 +1391,39 @@ fn parse_content_projects_caller_text_without_opening_a_document() {
     let parsed = parser.parse_content(&content).unwrap();
     check_result_ranges(parsed.view());
     assert!(parsed.text().contains("hello content"));
-    assert_eq!(view_str(parsed.pages()[0].label), "A-1");
+    assert_eq!(pooled(parsed.view(), parsed.pages()[0].label), "A-1");
+
+    // A string range outside the pool is rejected, not read.
+    let mut bad = content_item(
+        LiteParseStr {
+            offset: 1_000,
+            len: 4,
+        },
+        100.0,
+    );
+    bad.flags = 0;
+    let items = [bad];
+    content.items = items.as_ptr();
+    assert_eq!(
+        parser.parse_content(&content).unwrap_err(),
+        LITEPARSE_STATUS_INVALID_ARGUMENT
+    );
+    last_error_contains("string pool");
 }
 
 #[test]
 fn parse_content_rejects_bad_ranges_kinds_and_sizes() {
     let parser = Parser::plain();
-    let items = [content_item(b"x", 100.0)];
+    let mut pool = TestPool::default();
+    let x = pool.s(b"x");
+    let items = [content_item(x, 100.0)];
     let block = LiteParseLayoutBlock {
         kind: 99,
         ..Default::default()
     };
     let attempt = |page: LiteParsePage, shrink: usize| {
         let mut content = empty_content();
+        pool.install(&mut content);
         content.size_of_content -= shrink;
         content.pages = &page;
         content.pages_len = 1;
@@ -1304,6 +1466,7 @@ fn parse_content_rejects_bad_ranges_kinds_and_sizes() {
         let items = [item];
         let page = content_page(1, 0);
         let mut content = empty_content();
+        pool.install(&mut content);
         content.pages = &page;
         content.pages_len = 1;
         content.items = items.as_ptr();
@@ -1314,11 +1477,11 @@ fn parse_content_rejects_bad_ranges_kinds_and_sizes() {
         );
         last_error_contains(fragment);
     };
-    let mut nan = content_item(b"x", 100.0);
+    let mut nan = content_item(x, 100.0);
     nan.flags = LITEPARSE_TEXT_ITEM_FLAG_HAS_FONT_SIZE;
     nan.font_size = f32::NAN;
     reject_item(nan, "font metrics");
-    let mut unknown = content_item(b"x", 100.0);
+    let mut unknown = content_item(x, 100.0);
     unknown.flags = 1 << 30;
     reject_item(unknown, "unknown bits");
 
@@ -1337,7 +1500,8 @@ fn parse_content_accepts_and_packs_back_extras() {
         c.bools_set |= LITEPARSE_FLAG_EXTRACT_BLOCKS;
         c.bools_values |= LITEPARSE_FLAG_EXTRACT_BLOCKS;
     });
-    let items = [content_item(b"Body text", 300.0)];
+    let mut pool = TestPool::default();
+    let items = [content_item(pool.s(b"Body text"), 300.0)];
     let quadpoints = [LiteParseRect {
         x: 1.0,
         y: 2.0,
@@ -1346,8 +1510,8 @@ fn parse_content_accepts_and_packs_back_extras() {
     }];
     let annotations = [
         LiteParseAnnotation {
-            subtype: view(b"link"),
-            uri: view(b"https://example.invalid"),
+            subtype: pool.s(b"link"),
+            uri: pool.s(b"https://example.invalid"),
             rect: quadpoints[0],
             quadpoint_offset: 0,
             quadpoint_count: 1,
@@ -1355,14 +1519,14 @@ fn parse_content_accepts_and_packs_back_extras() {
             ..Default::default()
         },
         LiteParseAnnotation {
-            subtype: view(b"highlight"),
+            subtype: pool.s(b"highlight"),
             ..Default::default()
         },
     ];
-    let strings = [view(b"opt-a"), view(b"opt-b"), view(b"opt-b")];
+    let strings = [pool.s(b"opt-a"), pool.s(b"opt-b"), pool.s(b"opt-b")];
     let form_fields = [LiteParseFormField {
-        id: view(b"f1"),
-        field_type: view(b"combobox"),
+        id: pool.s(b"f1"),
+        field_type: pool.s(b"combobox"),
         page: 1,
         option_offset: 0,
         option_count: 2,
@@ -1372,8 +1536,8 @@ fn parse_content_accepts_and_packs_back_extras() {
         ..Default::default()
     }];
     let attributes = [LiteParseStructureAttribute {
-        name: view(b"O"),
-        string: view(b"Layout"),
+        name: pool.s(b"O"),
+        string: pool.s(b"Layout"),
         kind: LITEPARSE_STRUCTURE_ATTR_STRING,
         number: 0.0,
     }];
@@ -1381,12 +1545,12 @@ fn parse_content_accepts_and_packs_back_extras() {
     // Document > [Sect > [P], P]
     let structure = [
         LiteParseStructureNode {
-            element_type: view(b"Document"),
+            element_type: pool.s(b"Document"),
             parent_index: LITEPARSE_NO_PARENT,
             ..Default::default()
         },
         LiteParseStructureNode {
-            element_type: view(b"Sect"),
+            element_type: pool.s(b"Sect"),
             parent_index: 0,
             depth: 1,
             attribute_count: 1,
@@ -1395,14 +1559,14 @@ fn parse_content_accepts_and_packs_back_extras() {
             ..Default::default()
         },
         LiteParseStructureNode {
-            element_type: view(b"P"),
+            element_type: pool.s(b"P"),
             parent_index: 1,
             depth: 2,
             mcid_count: 2,
             ..Default::default()
         },
         LiteParseStructureNode {
-            element_type: view(b"P"),
+            element_type: pool.s(b"P"),
             parent_index: 0,
             depth: 1,
             ..Default::default()
@@ -1426,6 +1590,7 @@ fn parse_content_accepts_and_packs_back_extras() {
     page.structure_node_count = 4;
     page.vector_shape_count = 1;
     let mut content = empty_content();
+    pool.install(&mut content);
     content.pages = &page;
     content.pages_len = 1;
     content.items = items.as_ptr();
@@ -1463,7 +1628,10 @@ fn parse_content_accepts_and_packs_back_extras() {
         page.annotation_count,
     );
     assert_eq!(page_annotations.len(), 1);
-    assert_eq!(view_str(page_annotations[0].uri), "https://example.invalid");
+    assert_eq!(
+        pooled(view, page_annotations[0].uri),
+        "https://example.invalid"
+    );
     assert_eq!(page_annotations[0].quadpoint_count, 1);
     let quads = arr(view.content.quadpoints, view.content.quadpoints_len);
     assert_eq!(
@@ -1482,12 +1650,15 @@ fn parse_content_accepts_and_packs_back_extras() {
     assert_eq!(
         range(out_strings, fields[0].option_offset, fields[0].option_count)
             .iter()
-            .map(|s| view_str(*s))
+            .map(|s| pooled(view, *s))
             .collect::<Vec<_>>(),
         ["opt-a", "opt-b"]
     );
     assert_eq!(
-        view_str(range(out_strings, fields[0].selected_option_offset, 1)[0]),
+        pooled(
+            view,
+            range(out_strings, fields[0].selected_option_offset, 1)[0]
+        ),
         "opt-b"
     );
 
@@ -1500,7 +1671,7 @@ fn parse_content_accepts_and_packs_back_extras() {
         page.structure_node_count,
     );
     assert_eq!(nodes.len(), 4);
-    let types: Vec<String> = nodes.iter().map(|n| view_str(n.element_type)).collect();
+    let types: Vec<String> = nodes.iter().map(|n| pooled(view, n.element_type)).collect();
     assert_eq!(types, ["Document", "Sect", "P", "P"]);
     let parents: Vec<u32> = nodes.iter().map(|n| n.parent_index).collect();
     let base = page.structure_node_offset;
@@ -1514,10 +1685,13 @@ fn parse_content_accepts_and_packs_back_extras() {
         nodes[1].attribute_offset,
         1,
     )[0];
-    assert_eq!(view_str(attribute.string), "Layout");
+    assert_eq!(pooled(view, attribute.string), "Layout");
     assert_eq!(nodes[1].annotation_count, 1);
     assert_eq!(
-        view_str(range(out_annotations, nodes[1].annotation_offset, 1)[0].subtype),
+        pooled(
+            view,
+            range(out_annotations, nodes[1].annotation_offset, 1)[0].subtype
+        ),
         "highlight"
     );
     assert_eq!(
@@ -1549,16 +1723,17 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
         c.bools_set |= LITEPARSE_FLAG_EXTRACT_BLOCKS;
         c.bools_values |= LITEPARSE_FLAG_EXTRACT_BLOCKS;
     });
-    let items = [content_item(b"Title", 100.0)];
+    let mut pool = TestPool::default();
+    let items = [content_item(pool.s(b"Title"), 100.0)];
     let cells = [
         LiteParseLayoutCell {
-            text: view(b"wide"),
+            text: pool.s(b"wide"),
             colspan: 2,
             rowspan: 3,
             ..Default::default()
         },
         LiteParseLayoutCell {
-            text: view(b"b"),
+            text: pool.s(b"b"),
             ..Default::default()
         },
     ];
@@ -1569,7 +1744,7 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
     let blocks = [
         LiteParseLayoutBlock {
             kind: LITEPARSE_BLOCK_HEADING,
-            text: view(b"Title"),
+            text: pool.s(b"Title"),
             level: 2,
             flags: LITEPARSE_BLOCK_FLAG_HAS_LEVEL,
             ..Default::default()
@@ -1586,6 +1761,7 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
     let mut page = content_page(1, 0);
     page.block_count = 2;
     let mut content = empty_content();
+    pool.install(&mut content);
     content.pages = &page;
     content.pages_len = 1;
     content.items = items.as_ptr();
@@ -1609,7 +1785,7 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
     assert_eq!(out_blocks.len(), 2);
     assert_eq!(out_blocks[0].kind, LITEPARSE_BLOCK_HEADING);
     assert_eq!(out_blocks[0].level, 2);
-    assert_eq!(view_str(out_blocks[0].text), "Title");
+    assert_eq!(pooled(view, out_blocks[0].text), "Title");
     let table = &out_blocks[1];
     assert_eq!(table.kind, LITEPARSE_BLOCK_MERGED_TABLE);
     assert_eq!((table.header_rows, table.row_count), (1, 1));
@@ -1624,15 +1800,19 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
         out_rows[0].cell_count,
     );
     assert_eq!((out_cells[0].colspan, out_cells[0].rowspan), (2, 3));
-    assert_eq!(view_str(out_cells[0].text), "wide");
-    let markdown = view_str(page.markdown);
+    assert_eq!(pooled(view, out_cells[0].text), "wide");
+    let markdown = pooled(view, page.markdown);
     assert!(markdown.contains("## Title"), "markdown was: {markdown}");
 
     // max_pages truncates the page list and drops document-level blocks.
     let one = Parser::new(|c| c.max_pages = 1);
-    let items = [content_item(b"one", 100.0), content_item(b"two", 100.0)];
+    let items = [
+        content_item(pool.s(b"one"), 100.0),
+        content_item(pool.s(b"two"), 100.0),
+    ];
     let pages = [content_page(1, 0), content_page(2, 1)];
     let mut content = empty_content();
+    pool.install(&mut content);
     content.pages = pages.as_ptr();
     content.pages_len = 2;
     content.items = items.as_ptr();
@@ -1673,6 +1853,11 @@ fn forms_and_metadata_pack_on_parse_and_extract() {
         );
         assert!(!fields.is_empty());
         assert!(fields.iter().all(|f| f.page == 1));
+        for field in fields {
+            assert!(!pooled(view, field.id).is_empty());
+            check_str(view, field.name);
+            check_str(view, field.value);
+        }
     }
     let parsed = document.parse(&[]);
     assert_ne!(parsed.view().flags & LITEPARSE_RESULT_FLAG_HAS_DOC_META, 0);
@@ -1700,8 +1885,8 @@ fn annotations_forward_twin_links_on_parse_and_extract() {
         );
         assert_eq!(annotations.len(), 2);
         for annotation in annotations {
-            assert_eq!(view_str(annotation.subtype), "link");
-            assert_eq!(view_str(annotation.uri), "https://example.invalid/twin");
+            assert_eq!(pooled(view, annotation.subtype), "link");
+            assert_eq!(pooled(view, annotation.uri), "https://example.invalid/twin");
             assert_ne!(annotation.flags & LITEPARSE_ANNOTATION_FLAG_HAS_RECT, 0);
         }
     }
@@ -1724,11 +1909,11 @@ fn structure_tree_and_mcids_pack_with_absolute_parents() {
         page.struct_node_offset,
         page.struct_node_count,
     );
-    assert!(struct_nodes.iter().any(|n| view_str(n.role) == "H1"));
+    assert!(struct_nodes.iter().any(|n| pooled(view, n.role) == "H1"));
     let mcids = arr(view.content.mcids, view.content.mcids_len);
     let h1 = struct_nodes
         .iter()
-        .find(|n| view_str(n.role) == "H1")
+        .find(|n| pooled(view, n.role) == "H1")
         .unwrap();
     assert_eq!(range(mcids, h1.mcid_offset, h1.mcid_count), [0]);
     let items = range(
@@ -1750,7 +1935,7 @@ fn structure_tree_and_mcids_pack_with_absolute_parents() {
         page.structure_node_offset,
         page.structure_node_count,
     );
-    assert!(nodes.iter().any(|n| view_str(n.element_type) == "H1"));
+    assert!(nodes.iter().any(|n| pooled(view, n.element_type) == "H1"));
 
     // Struct nodes re-enter parse_content for heading classification.
     let reparsed = parser.parse_content(&view.content).unwrap();
@@ -1975,13 +2160,70 @@ fn one_document_serves_concurrent_operations() {
 }
 
 #[test]
-fn records_hold_no_pointers_besides_byte_views() {
-    // Fixed-width records: no `size_t`, so sizes are the same on every
-    // 64-bit target and independent of pointer width for pointer-free ones.
+fn records_are_pointer_free_and_fixed_width() {
+    // No `size_t` or pointers in text records, so their layout is the same
+    // on every target and a copied-out array stays readable.
+    assert_eq!(size_of::<LiteParseStr>(), 8);
+    assert_eq!(align_of::<LiteParseStr>(), 4);
     assert_eq!(size_of::<LiteParseRect>(), 16);
     assert_eq!(size_of::<LiteParseLayoutRow>(), 8);
     assert_eq!(size_of::<LiteParseProjectedRegion>(), 32);
     assert_eq!(size_of::<LiteParsePageComplexity>(), 68);
+    assert_eq!(
+        size_of::<LiteParseTextItem>(),
+        3 * 8 + 11 * 4 + 3 * 4 + 7 * 4
+    );
+    assert_eq!(align_of::<LiteParseTextItem>(), 4);
+    assert_eq!(align_of::<LiteParsePage>(), 4);
+    assert_eq!(align_of::<LiteParseProjectedLine>(), 4);
+    assert_eq!(align_of::<LiteParseRawTextItem>(), 8, "f64 baseline_gap");
+    // Binary payloads keep borrowed views, so those two records are
+    // pointer-width dependent.
     assert_eq!(size_of::<LiteParseByteView>(), 2 * size_of::<usize>());
-    assert_eq!(align_of::<LiteParseTextItem>(), align_of::<usize>());
+    assert_eq!(align_of::<LiteParseImage>(), align_of::<usize>());
+    assert_eq!(align_of::<LiteParseScreenshot>(), align_of::<usize>());
+    // Every selector reports the size the compiler sees.
+    assert_eq!(
+        liteparse_sizeof(LITEPARSE_TYPE_TEXT_ITEM),
+        size_of::<LiteParseTextItem>()
+    );
+    assert_eq!(
+        liteparse_sizeof(LITEPARSE_TYPE_RESULT_VIEW),
+        size_of::<LiteParseResultView>()
+    );
+    assert_eq!(
+        liteparse_sizeof(LITEPARSE_TYPE_RAW_TEXT_VIEW),
+        size_of::<LiteParseRawTextView>()
+    );
+}
+
+#[test]
+fn a_result_can_be_copied_out_and_read_after_the_handle_is_freed() {
+    // The consumption pattern the pool exists for: bulk-copy the arrays and
+    // the pool, free the handle, keep reading.
+    let parser = Parser::plain();
+    let parsed = parser.open("page_labels.pdf").parse(&[]);
+    let view = parsed.view();
+    let pool = view.pool().to_vec();
+    let pages = parsed.pages().to_vec();
+    let items = arr(view.content.items, view.content.items_len).to_vec();
+    let expected = parsed.text();
+    let text = view.text;
+    drop(parsed);
+    drop(parser);
+
+    let read = |s: LiteParseStr| {
+        let start = s.offset as usize;
+        let end = start + s.len as usize;
+        assert_eq!(pool[end], 0);
+        std::str::from_utf8(&pool[start..end]).unwrap().to_owned()
+    };
+    assert_eq!(read(text), expected);
+    assert_eq!(read(pages[1].label), "ii");
+    let first = &items[pages[0].item_offset as usize];
+    assert!(!read(first.text).is_empty());
+    assert!(expected.contains(&read(first.text)));
+    // Empty strings are `{0, 0}` and read as an empty C string.
+    assert_eq!(pool[0], 0);
+    assert_eq!(read(LiteParseStr::default()), "");
 }

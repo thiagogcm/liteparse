@@ -21,10 +21,83 @@ pub(crate) fn bytes_view(value: &[u8]) -> LiteParseByteView {
     }
 }
 
-pub(crate) fn optional_str_view(value: Option<&str>) -> LiteParseByteView {
-    value.map_or_else(LiteParseByteView::default, |value| {
-        bytes_view(value.as_bytes())
-    })
+/// A UTF-8 string stored in the owning view's `pool`: bytes
+/// `pool[offset .. offset + len]`, followed by a NUL byte that `len` does not
+/// count. Absent and empty strings are both `len == 0`; the pool starts with
+/// a NUL so `{0, 0}` also reads as an empty C string. Records hold no
+/// pointers, so a view's arrays and pool can be copied out of the handle and
+/// read from anywhere.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LiteParseStr {
+    pub offset: u32,
+    pub len: u32,
+}
+
+/// String storage behind every `LiteParseStr` a handle exposes. Never
+/// modified after packing, so views may point at it.
+pub(crate) struct Pool(Vec<u8>);
+
+impl Default for Pool {
+    fn default() -> Self {
+        Self(vec![0])
+    }
+}
+
+impl Pool {
+    /// Append `value` and its NUL terminator; empty strings are not stored.
+    pub(crate) fn push(&mut self, value: &str) -> LiteParseStr {
+        if value.is_empty() {
+            return LiteParseStr::default();
+        }
+        let offset = self.0.len();
+        self.0.reserve(value.len() + 1);
+        self.0.extend_from_slice(value.as_bytes());
+        self.0.push(0);
+        LiteParseStr {
+            offset: u32::try_from(offset).expect("string pool exceeds u32::MAX bytes"),
+            len: packed_len(value.len()),
+        }
+    }
+
+    pub(crate) fn push_opt(&mut self, value: Option<&str>) -> LiteParseStr {
+        value.map_or_else(LiteParseStr::default, |value| self.push(value))
+    }
+
+    pub(crate) fn ptr(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Resolve an input `LiteParseStr` against the caller's pool. `len == 0` is
+/// absent; anything else must lie inside the pool and be valid UTF-8.
+pub(crate) fn pool_str<'a>(
+    pool: &'a [u8],
+    value: LiteParseStr,
+    name: &str,
+) -> FfiResult<Option<&'a str>> {
+    if value.len == 0 {
+        return Ok(None);
+    }
+    let start = value.offset as usize;
+    let bytes = start
+        .checked_add(value.len as usize)
+        .and_then(|end| pool.get(start..end))
+        .ok_or_else(|| {
+            FfiError::invalid_argument(format!(
+                "{name} range {}+{} is outside the {}-byte string pool",
+                value.offset,
+                value.len,
+                pool.len()
+            ))
+        })?;
+    std::str::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| FfiError::invalid_argument(format!("{name} is not valid UTF-8: {error}")))
 }
 
 /// Maps an opaque C handle type to its Rust state and the borrowed view it
@@ -134,27 +207,39 @@ pub(crate) unsafe fn write_out<T>(out: *mut T, value: T) {
     }
 }
 
+/// A caller string given as pointer and length. Null is absent only with a
+/// zero length.
+pub(crate) unsafe fn optional_str<'a>(
+    ptr: *const u8,
+    len: usize,
+    name: &str,
+) -> FfiResult<Option<&'a str>> {
+    let Some(bytes) = unsafe { as_slice(ptr, len, name) }? else {
+        return Ok(None);
+    };
+    std::str::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| FfiError::invalid_argument(format!("{name} is not valid UTF-8: {error}")))
+}
+
+pub(crate) unsafe fn required_str<'a>(
+    ptr: *const u8,
+    len: usize,
+    name: &str,
+) -> FfiResult<&'a str> {
+    unsafe { optional_str(ptr, len, name) }?
+        .ok_or_else(|| FfiError::invalid_argument(format!("{name} must not be null")))
+}
+
 pub(crate) unsafe fn optional_view_str(
     view: LiteParseByteView,
     name: &str,
 ) -> FfiResult<Option<String>> {
-    if view.ptr.is_null() {
-        if view.len != 0 {
-            return Err(FfiError::invalid_argument(format!(
-                "{name} must have length zero when its pointer is null"
-            )));
-        }
-        return Ok(None);
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(view.ptr, view.len) };
-    std::str::from_utf8(bytes)
-        .map(|value| Some(value.to_owned()))
-        .map_err(|error| FfiError::invalid_argument(format!("{name} is not valid UTF-8: {error}")))
+    Ok(unsafe { optional_str(view.ptr, view.len, name) }?.map(str::to_owned))
 }
 
 pub(crate) unsafe fn required_view_str(view: LiteParseByteView, name: &str) -> FfiResult<String> {
-    unsafe { optional_view_str(view, name) }?
-        .ok_or_else(|| FfiError::invalid_argument(format!("{name} must not be null")))
+    Ok(unsafe { required_str(view.ptr, view.len, name) }?.to_owned())
 }
 
 pub(crate) unsafe fn view_bytes<'a>(view: LiteParseByteView, name: &str) -> FfiResult<&'a [u8]> {

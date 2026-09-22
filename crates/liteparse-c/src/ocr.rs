@@ -6,7 +6,8 @@ use std::ptr;
 use liteparse::ocr::{OcrEngine, OcrOptions, OcrResult};
 
 use crate::handle::{
-    LiteParseByteView, as_slice, bytes_view, opaque_handles, required_view_str, state_mut,
+    LiteParseByteView, as_slice, bytes_view, opaque_handles, required_str, required_view_str,
+    state_mut,
 };
 use crate::status::{FfiError, LiteParseStatus, boundary};
 
@@ -212,17 +213,19 @@ pub unsafe extern "C" fn liteparse_ocr_sink_add(
     })
 }
 
-/// Set the callback's failure message.
+/// Set the callback's failure message: `message_len` bytes of UTF-8.
 ///
-/// `sink` must belong to the current callback and `message` must be readable.
+/// `sink` must belong to the current callback and `message` must be
+/// readable for `message_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_ocr_sink_set_error(
     sink: *mut LiteParseOcrSink,
-    message: LiteParseByteView,
+    message: *const u8,
+    message_len: usize,
 ) -> LiteParseStatus {
     boundary(|| unsafe {
         let state = state_mut(sink)?;
-        state.error = Some(required_view_str(message, "message")?);
+        state.error = Some(required_str(message, message_len, "message")?.to_owned());
         Ok(())
     })
 }

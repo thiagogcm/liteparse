@@ -3,20 +3,20 @@ use std::sync::{Arc, OnceLock};
 use liteparse::conversion::{PdfInputGuard, resolve_pdf_input};
 use liteparse::ocr::OcrEngine;
 use liteparse::ocr_merge::PageComplexityStats;
-use liteparse::types::{OutlineTarget, PdfInput};
+use liteparse::types::PdfInput;
 use liteparse::{GlyphResolver, LiteParseConfig as CoreConfig, ParseResult};
 use liteparse_pdfium::{Document, Library};
 
 use crate::complexity::{ComplexityState, LiteParseComplexity};
 use crate::extract::extract_pages;
 use crate::handle::{
-    LiteParseByteView, array_ptr, as_slice, copy_array, create_handle, free_handle, opaque_handles,
-    required_view_str, state_ref, view_of, view_state,
+    Pool, array_ptr, as_slice, copy_array, create_handle, free_handle, opaque_handles,
+    required_str, state_ref, view_of, view_state,
 };
 use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, ParserState, build_parser};
 use crate::raw_text::{LiteParseRawText, extract_raw_text};
-use crate::records::{DescriptiveInfo, LiteParseOutlineEntry, views};
+use crate::records::{DescriptiveInfo, LiteParseOutlineEntry, pack_all};
 use crate::render::{RenderRequest, load_document, page_facts, render_pages};
 use crate::result::{LiteParseResult, PageGeometries, ResultState};
 use crate::runtime::block_on;
@@ -45,6 +45,9 @@ pub struct LiteParseDocumentInfo {
     pub total_pages: u32,
     /// `LITEPARSE_DOCUMENT_FLAG_*` bits.
     pub flags: u32,
+    /// String pool behind the outline titles.
+    pub pool: *const u8,
+    pub pool_len: usize,
     /// Bookmarks, walked once at open.
     pub outline: *const LiteParseOutlineEntry,
     pub outline_len: usize,
@@ -74,10 +77,9 @@ pub(crate) struct DocumentState {
     pub(crate) input: PdfInput,
     guard: PdfInputGuard,
     total_pages: u32,
-    /// Owns the titles `outline_entries` borrow.
-    #[allow(dead_code)]
-    outline: Vec<OutlineTarget>,
     /// Backing storage for `info`.
+    #[allow(dead_code)]
+    pool: Pool,
     #[allow(dead_code)]
     outline_entries: Vec<LiteParseOutlineEntry>,
     info: LiteParseDocumentInfo,
@@ -117,7 +119,8 @@ impl DocumentState {
                 want_descriptive.then(|| DescriptiveInfo::read(&document)),
             )
         };
-        let outline_entries: Vec<LiteParseOutlineEntry> = views(&outline);
+        let mut pool = Pool::default();
+        let outline_entries = pack_all(&mut pool, &outline, LiteParseOutlineEntry::pack);
         let info = LiteParseDocumentInfo {
             total_pages,
             flags: if guard.is_converted() {
@@ -125,6 +128,8 @@ impl DocumentState {
             } else {
                 0
             },
+            pool: pool.ptr(),
+            pool_len: pool.len(),
             outline: array_ptr(&outline_entries),
             outline_len: outline_entries.len(),
         };
@@ -135,7 +140,7 @@ impl DocumentState {
             input,
             guard,
             total_pages,
-            outline,
+            pool,
             outline_entries,
             info,
             descriptive,
@@ -254,18 +259,21 @@ impl DocumentState {
 }
 
 /// Open a path, converting non-PDF input once for the document's lifetime.
+/// `path` is `path_len` bytes of UTF-8, not NUL-terminated.
 ///
-/// `parser` must be live, `path` readable UTF-8, and `out` writable.
+/// `parser` must be live, `path` readable for `path_len` bytes, and `out`
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn liteparse_document_open_path(
     parser: *const LiteParseParser,
-    path: LiteParseByteView,
+    path: *const u8,
+    path_len: usize,
     out: *mut *mut LiteParseDocument,
 ) -> LiteParseStatus {
     unsafe {
         create_handle(out, || {
             let parser = state_ref(parser)?;
-            let path = required_view_str(path, "path")?;
+            let path = required_str(path, path_len, "path")?.to_owned();
             DocumentState::open(parser, PdfInput::Path(path))
         })
     }
