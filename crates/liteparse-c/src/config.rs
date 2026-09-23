@@ -19,6 +19,9 @@ pub const LITEPARSE_IMAGE_MODE_EMBED: u32 = 2;
 /// Keeps the native default in `u32` config fields.
 pub const LITEPARSE_UNSET: u32 = u32::MAX;
 
+/// Default resolution in DPI for raster rendering and screenshots.
+pub const LITEPARSE_DEFAULT_DPI: f32 = 150.0;
+
 /// `LiteParseConfig.flags` bits.
 pub const LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX: u32 = 1 << 0;
 
@@ -362,4 +365,14 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
         core: config,
         font_db_dir,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_dpi_matches_core() {
+        assert_eq!(LITEPARSE_DEFAULT_DPI, liteparse::config::DEFAULT_DPI);
+    }
 }

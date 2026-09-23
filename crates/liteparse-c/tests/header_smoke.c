@@ -64,6 +64,7 @@ static LiteParseParser *new_parser(uint64_t extra_flags, uint32_t output_format)
   LiteParseConfig config;
   liteparse_config_init(&config);
   if (config.size_of_config != sizeof(LiteParseConfig)) return NULL;
+  if (LITEPARSE_DEFAULT_DPI < 149.0f || LITEPARSE_DEFAULT_DPI > 151.0f) return NULL;
   config.bools_set = LITEPARSE_FLAG_QUIET | LITEPARSE_FLAG_OCR_ENABLED |
                      LITEPARSE_FLAG_EMIT_WORD_BOXES | extra_flags;
   config.bools_values = LITEPARSE_FLAG_QUIET | LITEPARSE_FLAG_EMIT_WORD_BOXES | extra_flags;

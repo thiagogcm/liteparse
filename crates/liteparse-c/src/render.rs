@@ -1,5 +1,6 @@
-use liteparse::extract::{apply_page_orientation_corrections, encode_png};
-use liteparse::render::{MAX_RENDER_LONG_EDGE_PX, find_solid_rects_rgba, is_solid_fill_rgba};
+use image::ImageEncoder;
+use liteparse::render::{find_solid_rects_rgba, is_solid_fill_rgba};
+use liteparse::stages;
 use liteparse::types::{PdfInput, ScreenshotRect};
 use liteparse::{LiteParseConfig as CoreConfig, ScreenshotResult};
 use liteparse_pdfium::{Document, Library, Page, RectF};
@@ -7,6 +8,22 @@ use liteparse_pdfium::{Document, Library, Page, RectF};
 use crate::document::LiteParseRenderRegion;
 use crate::records::LiteParsePageGeometry;
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
+
+const MAX_RENDER_LONG_EDGE_PX: f32 = 30_000.0;
+
+fn encode_png(rgba: &[u8], width: u32, height: u32) -> FfiResult<Vec<u8>> {
+    let mut png_buf = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
+    encoder
+        .write_image(rgba, width, height, image::ColorType::Rgba8.into())
+        .map_err(|e| {
+            FfiError::new(
+                LITEPARSE_STATUS_PARSE_ERROR,
+                format!("PNG encode error: {e}"),
+            )
+        })?;
+    Ok(png_buf)
+}
 
 /// The page's crop box, or its media box when none is set: the same fallback
 /// the core extractor uses.
@@ -163,17 +180,6 @@ impl<'a> RenderRequest<'a> {
     }
 }
 
-pub(crate) fn load_document<'lib>(
-    lib: &'lib Library,
-    input: &PdfInput,
-    password: Option<&str>,
-) -> FfiResult<Document<'lib>> {
-    Ok(match input {
-        PdfInput::Path(path) => lib.load_document(path, password)?,
-        PdfInput::Bytes(data) => lib.load_document_from_bytes(data, password)?,
-    })
-}
-
 pub(crate) fn render_pages(
     input: &PdfInput,
     pages: Option<&[u32]>,
@@ -181,8 +187,12 @@ pub(crate) fn render_pages(
     config: &CoreConfig,
 ) -> FfiResult<Vec<RenderedScreenshot>> {
     let lib = Library::init();
-    let document = load_document(&lib, input, request.password)?;
-    apply_page_orientation_corrections(&document, &config.page_orientation_corrections)?;
+    let document = stages::open(
+        &lib,
+        input,
+        request.password,
+        &config.page_orientation_corrections,
+    )?;
     let form = request
         .render_form_fields
         .then(|| document.form_environment())

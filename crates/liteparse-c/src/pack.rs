@@ -456,7 +456,7 @@ impl Packed {
             id: self.pool.push_opt(block.id.as_deref()),
             format: self.pool.push_opt(block.format.as_deref()),
             bbox,
-            kind: block_kind(block.kind).unwrap_or(LITEPARSE_BLOCK_UNKNOWN),
+            kind: block_kind(&block.kind).unwrap_or(LITEPARSE_BLOCK_UNKNOWN),
             flags: flag_bits(&[
                 (has_level, LITEPARSE_BLOCK_FLAG_HAS_LEVEL),
                 (block.bold, LITEPARSE_BLOCK_FLAG_BOLD),

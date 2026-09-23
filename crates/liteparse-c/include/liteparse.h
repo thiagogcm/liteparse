@@ -290,6 +290,11 @@
 #define LITEPARSE_UNSET UINT32_MAX
 
 /**
+ * Default resolution in DPI for raster rendering and screenshots.
+ */
+#define LITEPARSE_DEFAULT_DPI 150.0
+
+/**
  * `LiteParseConfig.flags` bits.
  */
 #define LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX (1 << 0)

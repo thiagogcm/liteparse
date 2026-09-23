@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 use liteparse::conversion::{PdfInputGuard, resolve_pdf_input};
 use liteparse::ocr::OcrEngine;
 use liteparse::ocr_merge::PageComplexityStats;
+use liteparse::stages;
 use liteparse::types::PdfInput;
 use liteparse::{GlyphResolver, LiteParseConfig as CoreConfig, ParseResult};
 use liteparse_pdfium::{Document, Library};
@@ -17,7 +18,7 @@ use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, ParserState, build_parser};
 use crate::raw_text::{LiteParseRawText, extract_raw_text};
 use crate::records::{DescriptiveInfo, LiteParseOutlineEntry, pack_all};
-use crate::render::{RenderRequest, load_document, page_facts, render_pages};
+use crate::render::{RenderRequest, page_facts, render_pages};
 use crate::result::{LiteParseResult, PageGeometries, ResultState};
 use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
@@ -112,10 +113,15 @@ impl DocumentState {
         let want_descriptive = config.extract_document_metadata && !guard.is_converted();
         let (total_pages, outline, descriptive) = {
             let lib = Library::init();
-            let document = load_document(&lib, &input, password.as_deref())?;
+            let document = stages::open(
+                &lib,
+                &input,
+                password.as_deref(),
+                &config.page_orientation_corrections,
+            )?;
             (
                 document.page_count().max(0) as u32,
-                liteparse::extract::extract_outline(&document),
+                stages::outline(&document),
                 want_descriptive.then(|| DescriptiveInfo::read(&document)),
             )
         };
@@ -173,7 +179,7 @@ impl DocumentState {
         Ok(Some(pages))
     }
 
-    fn parser_for(&self, pages: Option<&[u32]>) -> liteparse::LiteParse {
+    pub(crate) fn parser_for(&self, pages: Option<&[u32]>) -> liteparse::LiteParse {
         let mut config = self.config.clone();
         config.target_pages = pages.map(|pages| {
             pages
@@ -230,14 +236,12 @@ impl DocumentState {
                 return read(document);
             }
             let lib = Library::init();
-            let opened = load_document(&lib, &self.input, self.config.password.as_deref())
-                .and_then(|document| {
-                    liteparse::extract::apply_page_orientation_corrections(
-                        &document,
-                        &self.config.page_orientation_corrections,
-                    )?;
-                    Ok(document)
-                });
+            let opened = stages::open(
+                &lib,
+                &self.input,
+                self.config.password.as_deref(),
+                &self.config.page_orientation_corrections,
+            );
             match opened {
                 Ok(document) => read(&document),
                 Err(_) => vec![None; self.total_pages as usize],

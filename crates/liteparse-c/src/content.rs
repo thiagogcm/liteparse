@@ -128,12 +128,8 @@ pub unsafe extern "C" fn liteparse_parser_parse_content(
                 page_stats.truncate(config.max_pages);
                 document_blocks = None;
             }
-            liteparse::extract::apply_content_filters(
-                &mut pages,
-                config.crop_box.as_ref(),
-                config.skip_diagonal_text,
-            );
             let core = build_parser(config.clone(), None, parser.glyph_resolver());
+            liteparse::stages::apply_content_filters(&mut pages, &core.content_filters());
             let result = if page_blocks.iter().any(|blocks| !blocks.is_empty())
                 || document_blocks.is_some()
             {

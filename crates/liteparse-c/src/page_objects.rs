@@ -6,7 +6,7 @@ use crate::handle::{
     packed_len, view_of, view_state,
 };
 use crate::records::{LiteParsePageGeometry, flag_bits};
-use crate::render::{load_document, map_pages, page_facts};
+use crate::render::{map_pages, page_facts};
 use crate::status::{FfiError, FfiResult};
 
 /// `LiteParsePageObject.kind` values.
@@ -489,9 +489,10 @@ pub(crate) fn extract_page_objects(
         ));
     }
     let lib = Library::init();
-    let document = load_document(&lib, &state.input, state.config.password.as_deref())?;
-    liteparse::extract::apply_page_orientation_corrections(
-        &document,
+    let document = liteparse::stages::open(
+        &lib,
+        &state.input,
+        state.config.password.as_deref(),
         &state.config.page_orientation_corrections,
     )?;
     let mut owned_objects = Vec::new();
