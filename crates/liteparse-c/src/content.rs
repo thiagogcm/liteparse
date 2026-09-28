@@ -19,7 +19,7 @@ use crate::handle::{
 };
 use crate::parser::{LiteParseParser, build_parser};
 use crate::records::*;
-use crate::result::{LiteParseResult, ResultState};
+use crate::result::{FormRecovery, LiteParseResult, ResultState};
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR, LiteParseStatus};
 
 /// Packed page content shared by caller input and result views.
@@ -194,7 +194,15 @@ pub unsafe extern "C" fn liteparse_parser_parse_content(
                 );
             }
             result.page_errors = owned.page_errors;
-            ResultState::parsed(&result, config, None, output_geometries)
+            // Caller-supplied pages never pass through extraction, so no
+            // form was flattened or repaired to read them.
+            ResultState::parsed(
+                &result,
+                config,
+                None,
+                output_geometries,
+                FormRecovery::default(),
+            )
         })
     }
 }

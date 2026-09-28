@@ -31,6 +31,67 @@ pub const LITEPARSE_RESULT_FLAG_EXTRACT_ONLY: u32 = 1 << 4;
 /// Extraction flattened at least one page to recover form-widget text; see
 /// `flattened_page_numbers`.
 pub const LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS: u32 = 1 << 5;
+/// Extraction read an AcroForm-repaired copy of the source: its page widgets
+/// were orphaned from a missing `/AcroForm`, which was rebuilt in memory to
+/// adopt their fields. Everything extracted, form fields and the form type
+/// included, comes from that copy; see `repaired_page_numbers`.
+pub const LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM: u32 = 1 << 6;
+
+/// How extraction recovered the document's form content: the facts behind
+/// `LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS` and
+/// `LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM`.
+#[derive(Default)]
+pub(crate) struct FormRecovery {
+    /// Pages flattened onto a temporary document to recover widget text.
+    pub(crate) flattened_pages: Vec<u32>,
+    /// Present when extraction read an AcroForm-repaired copy: the result's
+    /// pages holding the adopted fields' widgets, possibly none.
+    pub(crate) repaired_pages: Option<Vec<u32>>,
+}
+
+impl FormRecovery {
+    /// What extraction of `pages` did; `repaired` says it read the
+    /// AcroForm-repaired copy.
+    ///
+    /// Repair runs only on a source with no `/AcroForm`, where PDFium reads
+    /// no widget as a field, and the rebuilt one adopts the fields of the
+    /// pages' widgets. So every form field extraction found in the copy is
+    /// one the repair made readable, and the pages holding them are the
+    /// pages holding adopted widgets.
+    pub(crate) fn of(pages: &ExtractedPages, repaired: bool) -> Self {
+        Self {
+            flattened_pages: pages.flattened_page_numbers.clone(),
+            repaired_pages: repaired.then(|| {
+                pages
+                    .pages
+                    .iter()
+                    .filter(|page| page.form_fields.as_ref().is_some_and(|f| !f.is_empty()))
+                    .map(|page| page.page_number as u32)
+                    .collect()
+            }),
+        }
+    }
+
+    fn flags(&self) -> u32 {
+        flag_bits(&[
+            (
+                !self.flattened_pages.is_empty(),
+                LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS,
+            ),
+            (
+                self.repaired_pages.is_some(),
+                LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM,
+            ),
+        ])
+    }
+
+    fn pack(self, packed: &mut Packed) -> u32 {
+        let flags = self.flags();
+        packed.flattened_page_numbers = self.flattened_pages;
+        packed.repaired_page_numbers = self.repaired_pages.unwrap_or_default();
+        flags
+    }
+}
 
 /// Everything a result exposes. `content` is the page-content model accepted
 /// by `liteparse_parser_parse_content`; the remaining arrays are result only.
@@ -75,8 +136,16 @@ pub struct LiteParseResultView {
     pub regions_len: usize,
     pub region_children: *const u32,
     pub region_children_len: usize,
+    /// Ascending 1-based numbers of the pages extraction flattened onto a
+    /// temporary document to recover form-widget text.
     pub flattened_page_numbers: *const u32,
     pub flattened_page_numbers_len: usize,
+    /// With `LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM`, the ascending 1-based
+    /// numbers of the result's pages holding widgets the repair adopted:
+    /// the pages whose form fields only the repair made readable. Empty when
+    /// the selection holds none of them.
+    pub repaired_page_numbers: *const u32,
+    pub repaired_page_numbers_len: usize,
 }
 
 /// Result-level scalars that differ between parse and extract sources.
@@ -109,6 +178,7 @@ impl ResultState {
         config: &CoreConfig,
         descriptive: Option<&DescriptiveInfo>,
         geometries: PageGeometries,
+        forms: FormRecovery,
     ) -> FfiResult<Self> {
         let mut packed = Packed::default();
         for (index, page) in result.pages.iter().enumerate() {
@@ -118,6 +188,7 @@ impl ResultState {
             ))?;
         }
         packed.pack_sidecars(&result.images, &result.outline, &result.page_errors)?;
+        let form_flags = forms.pack(&mut packed);
         let requested_dpi = config.dpi;
         let screenshots_with_dpi = result.screenshots.iter().map(|shot| {
             let dpi = result
@@ -150,10 +221,11 @@ impl ResultState {
             total_pages: result.total_pages,
             image_error_count: result.image_error_count,
             form_type: result.form_type,
-            flags: flag_bits(&[(
-                result.xfa_packets.is_some(),
-                LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS,
-            )]),
+            flags: form_flags
+                | flag_bits(&[(
+                    result.xfa_packets.is_some(),
+                    LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS,
+                )]),
         };
         Self::assemble(packed, facts, config.extract_text_metadata)
     }
@@ -162,6 +234,7 @@ impl ResultState {
     pub(crate) fn extracted(
         pages: &ExtractedPages,
         form_type: Option<i32>,
+        forms: FormRecovery,
         config: &CoreConfig,
         geometries: PageGeometries,
         total_pages: u32,
@@ -176,9 +249,7 @@ impl ResultState {
         }
         packed.page_outputs.clear();
         packed.pack_sidecars(&pages.images, outline, &pages.page_errors)?;
-        packed
-            .flattened_page_numbers
-            .clone_from(&pages.flattened_page_numbers);
+        let form_flags = forms.pack(&mut packed);
         let facts = ResultFacts {
             text: LiteParseStr::default(),
             creator: LiteParseStr::default(),
@@ -187,13 +258,7 @@ impl ResultState {
             total_pages,
             image_error_count: pages.image_error_count,
             form_type,
-            flags: flag_bits(&[
-                (true, LITEPARSE_RESULT_FLAG_EXTRACT_ONLY),
-                (
-                    pages.flattened_form_widgets,
-                    LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS,
-                ),
-            ]),
+            flags: form_flags | LITEPARSE_RESULT_FLAG_EXTRACT_ONLY,
         };
         Self::assemble(packed, facts, config.extract_text_metadata)
     }
@@ -244,6 +309,8 @@ impl ResultState {
             region_children_len: packed.region_children.len(),
             flattened_page_numbers: array_ptr(&packed.flattened_page_numbers),
             flattened_page_numbers_len: packed.flattened_page_numbers.len(),
+            repaired_page_numbers: array_ptr(&packed.repaired_page_numbers),
+            repaired_page_numbers_len: packed.repaired_page_numbers.len(),
         };
         Ok(Self { packed, view })
     }
