@@ -212,8 +212,18 @@ the caller, which has every text item and field in the arrays.
 text items, graphics, and the configured extras, but no page outputs, text,
 Markdown, or projection. Link stamping and word boxes follow the parse rules (links only
 under Markdown; word boxes when requested or under Markdown).
+
+Parse and extract results report how extraction recovered form content.
 `LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS` and `flattened_page_numbers`
 report pages flattened on a temporary document to recover widget text.
+`LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM` reports that extraction read an
+AcroForm-repaired copy: with form-field extraction on, a PDF whose page
+widgets are orphaned from a missing `/AcroForm` is rewritten in memory with
+one adopting their fields, and everything extracted (text, form fields, the
+form type) comes from that copy. The repair is the document's, so the flag
+does not depend on the selection; `repaired_page_numbers` names the result's
+pages holding the adopted widgets. Results of `liteparse_parser_parse_content`
+report neither.
 
 Projected lines index `projected_spans` (text-item records sharing the
 content's `words` and `char_codes`) and `region_paths`. Regions are

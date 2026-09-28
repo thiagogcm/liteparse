@@ -3,7 +3,7 @@ use liteparse_pdfium::Library;
 
 use crate::document::DocumentState;
 use crate::render::page_geometry;
-use crate::result::ResultState;
+use crate::result::{FormRecovery, ResultState};
 use crate::status::FfiResult;
 
 /// Pre-projection pages: heuristic text items, graphics, and configured
@@ -19,6 +19,7 @@ pub(crate) fn extract_pages(
     let core = state.core();
     let request = core.extract_request(pages.as_deref(), config.max_pages);
     let extracted = stages::extract(&document, &request)?;
+    let forms = FormRecovery::of(&extracted, state.repaired_input(&lib).is_some());
     let geometries = extracted
         .pages
         .iter()
@@ -27,6 +28,7 @@ pub(crate) fn extract_pages(
     ResultState::extracted(
         &extracted,
         form_type,
+        forms,
         config,
         geometries,
         state.total_pages,
