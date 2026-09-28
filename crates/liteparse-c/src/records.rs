@@ -731,7 +731,9 @@ pub struct LiteParsePage {
     pub page_number: u32,
     /// `LITEPARSE_PAGE_FLAG_*` bits.
     pub flags: u32,
-    /// Viewport size in 72-DPI points.
+    /// Viewport size in 72-DPI points. Zero along an axis where the visible
+    /// box is empty, as for a crop box that misses the media box: such a
+    /// page is extracted and parsed like any other but cannot be rendered.
     pub width: f32,
     pub height: f32,
     /// The PDF `/PageLabels` entry, or empty.
