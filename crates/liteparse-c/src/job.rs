@@ -87,7 +87,13 @@ impl Job {
             .then(|| stages::xfa_packets(&document));
         let mut extracted =
             stages::extract(&document, &core.extract_request(pages, config.max_pages))?;
-        scope_marked_content_ids(&document, &mut extracted, || source.open(&lib, input))?;
+        scope_marked_content_ids(
+            &lib,
+            &document,
+            input,
+            config.password.as_deref(),
+            &mut extracted,
+        )?;
         let ocr_options = core.ocr_render_options(false, &extracted);
         let forms = FormRecovery::of(&extracted, source.repaired_input(&lib).is_some());
         let screenshot_options = core.screenshot_options(false);
