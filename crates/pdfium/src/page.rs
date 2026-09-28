@@ -252,12 +252,6 @@ pub struct Page<'doc, 'lib: 'doc> {
 }
 
 impl<'doc, 'lib: 'doc> Page<'doc, 'lib> {
-    /// The raw PDFium page, for PDFium calls this crate does not wrap. Valid
-    /// while the page lives, and only under the PDFium lock `'lib` holds.
-    pub fn handle(&self) -> pdfium_sys::FPDF_PAGE {
-        self.handle
-    }
-
     /// Page width in raw MediaBox units, exactly as PDFium reports it
     /// (ignores `/UserUnit`; multiply by [`Self::user_unit`] for the real
     /// size, or use [`Self::viewport_size`] which already does).

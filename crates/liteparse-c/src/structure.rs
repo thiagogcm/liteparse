@@ -11,10 +11,19 @@
 //! only the kids PDFium resolved to the tree's page, so the ids are read
 //! again through it and written over the core's, before anything packs or
 //! projects them.
+//!
+//! The pdfium crate hands out no raw page of its own documents, so the trees
+//! are walked on a raw PDFium document this module opens on the same input.
+//! That copy is never flattened, which is also the state extraction read
+//! structure in: it reads a page's structure before flattening its widgets.
+
+use std::collections::HashMap;
+use std::ffi::CString;
+use std::marker::PhantomData;
 
 use liteparse::extract::ExtractedPages;
-use liteparse::types::{Page as ExtractedPage, Rect, StructureTreeElement};
-use liteparse_pdfium::{Document, Page, RectF, collect_mcid_bboxes, pdfium_sys, union_mcid_bboxes};
+use liteparse::types::{Page as ExtractedPage, PdfInput, Rect, StructureTreeElement};
+use liteparse_pdfium::{Document, Library, RectF, ViewportTransform, pdfium_sys};
 
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
 
@@ -32,23 +41,18 @@ struct ScopedElement {
 /// structure tree with the page's own, and each struct node's box with the
 /// union of what those ids mark.
 ///
-/// `document` is the one `extracted` came from. Extraction read structure
-/// before flattening a page's form widgets into it, and flattening rewrites
-/// the page in place, so flattened pages are read from `reopen`, a fresh
-/// copy of the same input, opened at most once.
-pub(crate) fn scope_marked_content_ids<'lib>(
-    document: &Document<'lib>,
+/// `document` is the one `extracted` came from, opened from `input` with
+/// `password`; the trees are walked on a raw copy of `input`, opened once and
+/// only when a page is tagged.
+pub(crate) fn scope_marked_content_ids(
+    lib: &Library,
+    document: &Document<'_>,
+    input: &PdfInput,
+    password: Option<&str>,
     extracted: &mut ExtractedPages,
-    reopen: impl FnOnce() -> FfiResult<Document<'lib>>,
 ) -> FfiResult {
-    let ExtractedPages {
-        pages,
-        flattened_page_numbers,
-        ..
-    } = extracted;
-    let mut reopen = Some(reopen);
-    let mut pristine = None;
-    for page in pages {
+    let mut raw = None;
+    for page in &mut extracted.pages {
         let tagged = !page.struct_nodes.is_empty()
             || page
                 .structure_tree
@@ -57,21 +61,19 @@ pub(crate) fn scope_marked_content_ids<'lib>(
         if !tagged {
             continue;
         }
-        let source = if flattened_page_numbers.contains(&(page.page_number as u32)) {
-            if pristine.is_none() {
-                let open = reopen.take().expect("a copy is opened at most once");
-                pristine = Some(open()?);
-            }
-            pristine.as_ref().expect("opened above")
-        } else {
-            document
-        };
-        scope_page(source, page)?;
+        if raw.is_none() {
+            raw = Some(RawDocument::open(lib, input, password)?);
+        }
+        scope_page(document, raw.as_ref().expect("opened above"), page)?;
     }
     Ok(())
 }
 
-fn scope_page(document: &Document<'_>, page: &mut ExtractedPage) -> FfiResult {
+fn scope_page(
+    document: &Document<'_>,
+    raw: &RawDocument<'_>,
+    page: &mut ExtractedPage,
+) -> FfiResult {
     let number = page.page_number;
     let mismatch = || {
         FfiError::new(
@@ -79,8 +81,9 @@ fn scope_page(document: &Document<'_>, page: &mut ExtractedPage) -> FfiResult {
             format!("page {number}: the structure tree read differently than at extraction"),
         )
     };
-    let pdf_page = document.page(number as i32 - 1)?;
-    let elements = scoped_elements(&pdf_page);
+    let index = number as i32 - 1;
+    let raw_page = raw.page(index)?;
+    let elements = scoped_elements(&raw_page);
 
     // The walks must meet node for node: same count, same roles in the same
     // order, same shape. Anything else is not the tree extraction read, and
@@ -95,16 +98,19 @@ fn scope_page(document: &Document<'_>, page: &mut ExtractedPage) -> FfiResult {
         return Err(mismatch());
     }
     if !elements.is_empty() {
-        // The view box extraction measured the page's struct nodes in.
+        // The view box and transform extraction measured the page's struct
+        // nodes in, which orientation corrections and /UserUnit shape: the
+        // extracting document's own page supplies them.
+        let pdf_page = document.page(index)?;
         let view_box = pdf_page.view_box().unwrap_or(RectF {
             left: 0.0,
             top: pdf_page.height(),
             right: pdf_page.width(),
             bottom: 0.0,
         });
-        let boxes = collect_mcid_bboxes(&pdf_page, &view_box);
+        let boxes = mcid_boxes(&raw_page, &pdf_page.viewport_transform(&view_box));
         for (node, element) in page.struct_nodes.iter_mut().zip(&elements) {
-            node.bbox = union_mcid_bboxes(&element.ids, &boxes).map(|b| Rect {
+            node.bbox = union_boxes(&element.ids, &boxes).map(|b| Rect {
                 x: b.left,
                 y: b.top,
                 width: b.right - b.left,
@@ -126,6 +132,150 @@ fn scope_page(document: &Document<'_>, page: &mut ExtractedPage) -> FfiResult {
     Ok(())
 }
 
+/// The union, in viewport space, of the top-level page objects marked with
+/// each MCID: the boxes extraction joins a struct node's ids against. Page
+/// object bounds are in page space, which neither `/Rotate` nor the view box
+/// changes, so the raw copy's objects and the extracting page's transform
+/// give extraction's boxes.
+fn mcid_boxes(page: &RawPage<'_>, transform: &ViewportTransform) -> HashMap<i32, RectF> {
+    let pdfium = pdfium_sys::dynamic::pdfium();
+    let mut boxes: HashMap<i32, RectF> = HashMap::new();
+    // SAFETY: `page` is a live page of an open document, under the PDFium
+    // lock its lifetime carries; objects are used only while it lives.
+    unsafe {
+        for index in 0..(pdfium.FPDFPage_CountObjects)(page.handle) {
+            let object = (pdfium.FPDFPage_GetObject)(page.handle, index);
+            if object.is_null() {
+                continue;
+            }
+            let mcid = (pdfium.FPDFPageObj_GetMarkedContentID)(object);
+            if mcid < 0 {
+                continue;
+            }
+            let (mut left, mut bottom, mut right, mut top) = (0.0, 0.0, 0.0, 0.0);
+            if (pdfium.FPDFPageObj_GetBounds)(object, &mut left, &mut bottom, &mut right, &mut top)
+                == 0
+            {
+                continue;
+            }
+            let bounds = transform.transform_bounds(&RectF {
+                left,
+                top,
+                right,
+                bottom,
+            });
+            boxes
+                .entry(mcid)
+                .and_modify(|joined| *joined = union(joined, &bounds))
+                .or_insert(bounds);
+        }
+    }
+    boxes
+}
+
+/// The union of the boxes of `ids`, `None` when none of them marks anything.
+fn union_boxes(ids: &[i32], boxes: &HashMap<i32, RectF>) -> Option<RectF> {
+    ids.iter()
+        .filter_map(|id| boxes.get(id))
+        .fold(None, |joined, rect| {
+            Some(joined.map_or(*rect, |joined| union(&joined, rect)))
+        })
+}
+
+/// Viewport rectangles grow downward: `top` is the smaller y.
+fn union(a: &RectF, b: &RectF) -> RectF {
+    RectF {
+        left: a.left.min(b.left),
+        top: a.top.min(b.top),
+        right: a.right.max(b.right),
+        bottom: a.bottom.max(b.bottom),
+    }
+}
+
+/// A raw PDFium document on the extraction input, for the structure walks.
+/// Holds `'lib`, the PDFium lock, for as long as it is open.
+struct RawDocument<'lib> {
+    handle: pdfium_sys::FPDF_DOCUMENT,
+    _lock: PhantomData<&'lib Library>,
+}
+
+impl<'lib> RawDocument<'lib> {
+    /// Open `input` as the extracting document was opened. `input`'s bytes
+    /// outlive the document: both borrow from the same caller.
+    fn open(_lib: &'lib Library, input: &'lib PdfInput, password: Option<&str>) -> FfiResult<Self> {
+        let failed = || {
+            FfiError::new(
+                LITEPARSE_STATUS_PARSE_ERROR,
+                "the document could not be opened again to read its structure",
+            )
+        };
+        let password = password
+            .map(|password| CString::new(password).map_err(|_| failed()))
+            .transpose()?;
+        let password = password.as_ref().map_or(std::ptr::null(), |p| p.as_ptr());
+        let pdfium = pdfium_sys::dynamic::pdfium();
+        // SAFETY: under the PDFium lock `_lib` holds; the path and password
+        // outlive the call, and bytes outlive the document (see above).
+        let handle = unsafe {
+            match input {
+                PdfInput::Path(path) => {
+                    let path = CString::new(path.as_str()).map_err(|_| failed())?;
+                    (pdfium.FPDF_LoadDocument)(path.as_ptr(), password)
+                }
+                PdfInput::Bytes(bytes) => {
+                    let len = i32::try_from(bytes.len()).map_err(|_| failed())?;
+                    (pdfium.FPDF_LoadMemDocument)(bytes.as_ptr().cast(), len, password)
+                }
+            }
+        };
+        if handle.is_null() {
+            return Err(failed());
+        }
+        Ok(Self {
+            handle,
+            _lock: PhantomData,
+        })
+    }
+
+    fn page(&self, index: i32) -> FfiResult<RawPage<'_>> {
+        // SAFETY: the document is open.
+        let handle = unsafe { (pdfium_sys::dynamic::pdfium().FPDF_LoadPage)(self.handle, index) };
+        if handle.is_null() {
+            return Err(FfiError::new(
+                LITEPARSE_STATUS_PARSE_ERROR,
+                format!(
+                    "page {} could not be loaded to read its structure",
+                    index + 1
+                ),
+            ));
+        }
+        Ok(RawPage {
+            handle,
+            _document: PhantomData,
+        })
+    }
+}
+
+impl Drop for RawDocument<'_> {
+    fn drop(&mut self) {
+        // SAFETY: every page borrows the document, so none outlives it.
+        unsafe { (pdfium_sys::dynamic::pdfium().FPDF_CloseDocument)(self.handle) };
+    }
+}
+
+/// A page of a [`RawDocument`], closed on drop.
+struct RawPage<'doc> {
+    handle: pdfium_sys::FPDF_PAGE,
+    _document: PhantomData<&'doc ()>,
+}
+
+impl Drop for RawPage<'_> {
+    fn drop(&mut self) {
+        // SAFETY: loaded by `RawDocument::page`, which it borrows.
+        unsafe { (pdfium_sys::dynamic::pdfium().FPDF_ClosePage)(self.handle) };
+    }
+}
+
 /// Write `element`'s and its descendants' ids from `scoped`, which walks the
 /// same tree in the same pre-order; `None` when the two disagree in shape.
 fn scope_element<'a>(
@@ -145,13 +295,13 @@ fn scope_element<'a>(
 
 /// Every element of `page`'s structure tree in pre-order, skipping the
 /// children PDFium did not load for the page, as the core's walks do.
-fn scoped_elements(page: &Page<'_, '_>) -> Vec<ScopedElement> {
+fn scoped_elements(page: &RawPage<'_>) -> Vec<ScopedElement> {
     let pdfium = pdfium_sys::dynamic::pdfium();
     // SAFETY: `page` is a live page loaded under the PDFium lock its
     // lifetime carries; the tree is closed before returning, and elements
     // are only used while it is open.
     unsafe {
-        let tree = (pdfium.FPDF_StructTree_GetForPage)(page.handle());
+        let tree = (pdfium.FPDF_StructTree_GetForPage)(page.handle);
         if tree.is_null() {
             return Vec::new();
         }
@@ -236,7 +386,6 @@ unsafe fn element_type(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::collections::BTreeSet;
 
     use liteparse::stages::{self, ExtractRequest, ExtractionOutputOptions};
@@ -377,10 +526,8 @@ mod tests {
         let core = stages::extract(&document, &request()).unwrap();
         let mut scoped = core.clone();
         tamper(&mut scoped);
-        let outcome = scope_marked_content_ids(&document, &mut scoped, || {
-            Ok(stages::open(&lib, &input, None, &[]).unwrap())
-        })
-        .map(|()| scoped);
+        let outcome =
+            scope_marked_content_ids(&lib, &document, &input, None, &mut scoped).map(|()| scoped);
         (core, outcome)
     }
 
@@ -494,17 +641,7 @@ mod tests {
         assert_eq!(core.flattened_page_numbers, [1], "page 1 is flattened");
 
         let mut scoped = core.clone();
-        let reopened = Cell::new(0);
-        scope_marked_content_ids(&document, &mut scoped, || {
-            reopened.set(reopened.get() + 1);
-            Ok(stages::open(&lib, &input, None, &[]).unwrap())
-        })
-        .unwrap();
-        assert_eq!(
-            reopened.get(),
-            1,
-            "only the flattened page reads a fresh copy"
-        );
+        scope_marked_content_ids(&lib, &document, &input, None, &mut scoped).unwrap();
 
         let expected: [&[&[i32]]; 2] = [&[&[], &[0], &[1]], &[&[], &[0], &[1]]];
         for ((page, before), expected) in scoped.pages.iter().zip(&core.pages).zip(expected) {
