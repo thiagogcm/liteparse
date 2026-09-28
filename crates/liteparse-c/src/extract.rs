@@ -20,9 +20,13 @@ pub(crate) fn extract_pages(
     let core = state.core();
     let request = core.extract_request(pages.as_deref(), config.max_pages);
     let mut extracted = stages::extract(&document, &request)?;
-    scope_marked_content_ids(&document, &mut extracted, || {
-        state.open(&lib, state.extraction_input(&lib))
-    })?;
+    scope_marked_content_ids(
+        &lib,
+        &document,
+        state.extraction_input(&lib),
+        config.password.as_deref(),
+        &mut extracted,
+    )?;
     let forms = FormRecovery::of(&extracted, state.repaired_input(&lib).is_some());
     let geometries = extracted
         .pages
