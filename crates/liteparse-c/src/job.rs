@@ -32,7 +32,7 @@ use crate::render::{
     preflight_parse_screenshots,
 };
 use crate::result::LiteParseResult;
-use crate::result::{PageGeometries, ResultState};
+use crate::result::{FormRecovery, PageGeometries, ResultState};
 use crate::runtime::block_on;
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
@@ -52,6 +52,8 @@ pub(crate) struct Job {
     xfa_packets: Option<Vec<XfaPacket>>,
     screenshots: Vec<ScreenshotResult>,
     complexity: Vec<PageComplexityStats>,
+    /// What extraction flattened or repaired to read the pages' forms.
+    forms: FormRecovery,
     geometries: HashMap<usize, (LiteParsePageGeometry, bool)>,
     /// OCR render options derived from what extraction did to the document.
     ocr_options: OcrRenderOptions,
@@ -84,6 +86,7 @@ impl Job {
             .then(|| stages::xfa_packets(&document));
         let extracted = stages::extract(&document, &core.extract_request(pages, config.max_pages))?;
         let ocr_options = core.ocr_render_options(false, &extracted);
+        let forms = FormRecovery::of(&extracted, source.repaired_input(&lib).is_some());
         let screenshot_options = core.screenshot_options(false);
         // Screenshots that paint form fields need a document extraction did
         // not flatten.
@@ -161,6 +164,7 @@ impl Job {
             xfa_packets,
             screenshots,
             complexity,
+            forms,
             geometries,
             raster_suffix_max,
             ocr_options,
@@ -365,11 +369,12 @@ impl Job {
     }
 
     /// Finish and pack the parse result.
-    pub(crate) fn into_result(self) -> FfiResult<ResultState> {
+    pub(crate) fn into_result(mut self) -> FfiResult<ResultState> {
         let source = self.source.clone();
+        let forms = std::mem::take(&mut self.forms);
         let (result, geometries) = self.finish();
         let descriptive = result.doc_meta.as_ref().and(source.descriptive.as_ref());
-        ResultState::parsed(&result, &source.config, descriptive, geometries)
+        ResultState::parsed(&result, &source.config, descriptive, geometries, forms)
     }
 
     /// Filter, project, classify, and render the pages into the parse

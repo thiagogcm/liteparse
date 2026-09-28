@@ -930,6 +930,14 @@
 #define LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS (1 << 5)
 
 /**
+ * Extraction read an AcroForm-repaired copy of the source: its page widgets
+ * were orphaned from a missing `/AcroForm`, which was rebuilt in memory to
+ * adopt their fields. Everything extracted, form fields and the form type
+ * included, comes from that copy; see `repaired_page_numbers`.
+ */
+#define LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM (1 << 6)
+
+/**
  * Per-page complexity signals. Views borrow from the handle.
  */
 typedef struct LiteParseComplexity LiteParseComplexity;
@@ -2146,8 +2154,20 @@ typedef struct {
   size_t regions_len;
   const uint32_t *region_children;
   size_t region_children_len;
+  /**
+   * Ascending 1-based numbers of the pages extraction flattened onto a
+   * temporary document to recover form-widget text.
+   */
   const uint32_t *flattened_page_numbers;
   size_t flattened_page_numbers_len;
+  /**
+   * With `LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM`, the ascending 1-based
+   * numbers of the result's pages holding widgets the repair adopted:
+   * the pages whose form fields only the repair made readable. Empty when
+   * the selection holds none of them.
+   */
+  const uint32_t *repaired_page_numbers;
+  size_t repaired_page_numbers_len;
 } LiteParseResultView;
 
 /**

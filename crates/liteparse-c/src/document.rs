@@ -164,18 +164,23 @@ impl Source {
         Ok(Some(pages))
     }
 
-    /// The input extraction reads: the AcroForm-repaired copy when form
-    /// fields are extracted and repair rewrote the source, else the source.
-    pub(crate) fn extraction_input(&self, lib: &Library) -> &PdfInput {
+    /// The AcroForm-repaired copy extraction reads: present when form fields
+    /// are extracted and repair rewrote the source.
+    pub(crate) fn repaired_input(&self, lib: &Library) -> Option<&PdfInput> {
         if !self.config.extract_form_fields {
-            return &self.input;
+            return None;
         }
         self.repaired
             .get_or_init(|| {
                 stages::repair_acroform(lib, &self.input, self.config.password.as_deref())
             })
             .as_ref()
-            .unwrap_or(&self.input)
+    }
+
+    /// The input extraction reads: the [repaired copy](Self::repaired_input)
+    /// when there is one, else the source.
+    pub(crate) fn extraction_input(&self, lib: &Library) -> &PdfInput {
+        self.repaired_input(lib).unwrap_or(&self.input)
     }
 
     #[cfg(test)]
