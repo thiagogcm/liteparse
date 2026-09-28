@@ -86,6 +86,29 @@ fn twin_links_pdf() -> Vec<u8> {
     ])
 }
 
+/// Three pages of text; the second's crop box misses its media box, so its
+/// visible box is empty and it has no area.
+fn zero_area_page_pdf() -> Vec<u8> {
+    let page = |crop: &str, contents: u32| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]{crop} \
+             /Resources << /Font << /F1 6 0 R >> >> /Contents {contents} 0 R >>"
+        )
+        .into_bytes()
+    };
+    assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+        page("", 7),
+        page(" /CropBox [700 800 900 1000]", 8),
+        page("", 9),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        stream("", b"BT /F1 24 Tf 72 700 Td (Visible page one.) Tj ET"),
+        stream("", b"BT /F1 24 Tf 72 700 Td (Hidden page two.) Tj ET"),
+        stream("", b"BT /F1 24 Tf 72 700 Td (Visible page three.) Tj ET"),
+    ])
+}
+
 fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     let mut out = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
     out.extend_from_slice(data);
@@ -3158,4 +3181,172 @@ fn tolerant_inspection_records_skipped_pages() {
         strict.page_objects(0).unwrap_err(),
         LITEPARSE_STATUS_PARSE_ERROR
     );
+}
+
+// ---------------------------------------------------------------------------
+// Zero-area pages
+
+fn page_errors(view: &LiteParseArenas) -> Vec<(u32, String)> {
+    arr(view.page_errors, view.page_errors_len)
+        .iter()
+        .map(|error| (error.page_number, pooled(view, error.message)))
+        .collect()
+}
+
+#[test]
+fn zero_area_pages_are_extracted_and_parsed_like_any_other() {
+    let parser = Parser::plain();
+    let document = parser.open_bytes(&zero_area_page_pdf());
+    let parsed = document.parse(&[]);
+    let extracted = document.extract(&[]);
+    for result in [&parsed, &extracted] {
+        check_result_ranges(result.view());
+        let pages = result.pages();
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.page_number)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        let empty = &pages[1];
+        assert_eq!((empty.width, empty.height), (0.0, 0.0));
+        assert_eq!(empty.item_count, 0);
+        assert_ne!(empty.flags & LITEPARSE_PAGE_FLAG_HAS_GEOMETRY, 0);
+        assert_eq!(result.view().content.arenas.page_errors_len, 0);
+    }
+    assert!(!parsed.text().contains("Hidden"));
+    assert!(parsed.text().contains("Visible page three."));
+
+    // What extraction reports passes back unchanged.
+    let reparsed = parser
+        .parse_content(&extracted.view().content)
+        .unwrap_or_else(|status| panic!("{status}: {}", last_error()));
+    assert_eq!(reparsed.pages().len(), 3);
+    assert_eq!(reparsed.pages()[1].width, 0.0);
+    assert_eq!(reparsed.text(), parsed.text());
+}
+
+#[test]
+fn parse_content_accepts_zero_but_not_negative_page_extents() {
+    let parser = Parser::plain();
+    let mut page = content_page(1, 0);
+    page.item_count = 0;
+    page.flags = LITEPARSE_PAGE_FLAG_HAS_GEOMETRY;
+    page.geometry.user_unit = 1.0;
+    (page.width, page.height) = (0.0, 0.0);
+    let mut content = empty_content();
+    content.total_pages = 1;
+    content.pages = &page;
+    content.pages_len = 1;
+    let parsed = parser.parse_content(&content).unwrap();
+    assert_eq!(parsed.pages()[0].width, 0.0);
+
+    let mut bad = page;
+    bad.height = -1.0;
+    content.pages = &bad;
+    assert_eq!(
+        parser.parse_content(&content).unwrap_err(),
+        LITEPARSE_STATUS_INVALID_ARGUMENT
+    );
+    last_error_contains("non-negative");
+
+    let mut bad = page;
+    bad.geometry.box_left = 1.0;
+    content.pages = &bad;
+    assert_eq!(
+        parser.parse_content(&content).unwrap_err(),
+        LITEPARSE_STATUS_INVALID_ARGUMENT
+    );
+    last_error_contains("geometry");
+}
+
+#[test]
+fn zero_area_pages_cannot_be_rendered() {
+    let strict = Parser::plain().open_bytes(&zero_area_page_pdf());
+    assert_eq!(
+        strict.screenshot(&[2], 0.0, None).unwrap_err(),
+        LITEPARSE_STATUS_PARSE_ERROR
+    );
+    last_error_contains("page 2 has no visible area to render");
+
+    let tolerant = Parser::new(|c| c.options |= LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR)
+        .open_bytes(&zero_area_page_pdf());
+    let shots = tolerant.screenshot(&[], 0.0, None).unwrap();
+    assert_eq!(
+        shots
+            .shots()
+            .iter()
+            .map(|shot| shot.page_number)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(
+        page_errors(&shots.view().arenas),
+        [(2, "page 2 has no visible area to render".to_owned())]
+    );
+
+    let parser = Parser::new(|c| {
+        c.options |= LITEPARSE_FLAG_EXTRACT_SCREENSHOTS | LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR;
+    });
+    let parsed = parser.open_bytes(&zero_area_page_pdf()).parse(&[]);
+    let view = parsed.view();
+    check_result_ranges(view);
+    assert_eq!(parsed.pages().len(), 3);
+    assert_eq!(
+        arr(view.screenshots, view.screenshots_len)
+            .iter()
+            .map(|shot| shot.page_number)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(
+        page_errors(&view.content.arenas),
+        [(2, "page 2 has no visible area to render".to_owned())]
+    );
+}
+
+#[test]
+fn ocr_never_renders_zero_area_pages() {
+    // One raster per round makes a round end, and the next start, around the
+    // area-less page; the default fits the whole document in one round.
+    for workers in [1, 0] {
+        let parser = Parser::new(|c| {
+            if workers > 0 {
+                c.num_workers = workers;
+            }
+        });
+        let document = parser.open_bytes(&zero_area_page_pdf());
+        let (rendered, pages) = render_ocr_rounds(&document, &[]);
+        // Too little text on either visible page to skip OCR.
+        assert_eq!(rendered, [1, 3], "workers {workers}");
+        assert_eq!(pages, 3);
+        let (rendered, _) = render_ocr_rounds(&document, &[2]);
+        assert!(rendered.is_empty(), "rendered {rendered:?}");
+    }
+}
+
+/// Run every OCR round of a job over `document` restricted to `selection`,
+/// recognising nothing; the rendered page numbers and the result's page count.
+fn render_ocr_rounds(document: &Document, selection: &[u32]) -> (Vec<u32>, usize) {
+    let mut job = document.begin(&[]);
+    let mut rendered = Vec::new();
+    loop {
+        let view = job
+            .render(selection, LITEPARSE_OCR_PIXEL_FORMAT_RGB)
+            .unwrap();
+        assert_eq!(view.arenas.page_errors_len, 0);
+        if view.rasters_len == 0 {
+            break;
+        }
+        rendered.extend(
+            arr(view.rasters, view.rasters_len)
+                .iter()
+                .map(|r| r.page_number),
+        );
+        assert_eq!(job.merge(&Recognition::default()), LITEPARSE_STATUS_OK);
+    }
+    let result = job.finish().unwrap();
+    assert_eq!(result.view().content.arenas.page_errors_len, 0);
+    (rendered, result.pages().len())
 }

@@ -244,12 +244,32 @@ fn preflight_pages(
         max_pages,
         config,
         |_, page| {
+            // An area-less page allocates nothing; its render reports it.
+            if !has_area(page) {
+                return Ok(());
+            }
             let (window, ..) = render_window(page, requested_dpi, region)?;
             used += checked_raster_bytes(window.width as f32, window.height as f32, used)?;
             Ok(())
         },
     )?;
     Ok(())
+}
+
+/// Whether `page` has a visible area to render. A crop box that misses the
+/// media box leaves none, and a zero-sized bitmap is not a resource limit but
+/// a page with no pixels.
+fn has_area(page: &Page<'_, '_>) -> bool {
+    page.width() > 0.0 && page.height() > 0.0
+}
+
+/// The failure of rendering a page with no visible area: it fails that page
+/// alone, as a parse error naming it.
+pub(crate) fn no_visible_area(page_num: u32) -> FfiError {
+    FfiError::new(
+        LITEPARSE_STATUS_PARSE_ERROR,
+        format!("page {page_num} has no visible area to render"),
+    )
 }
 
 /// Pixels per point for `page` at `requested_dpi`, after the long-edge cap.
@@ -405,6 +425,9 @@ fn render_page(
     page_num: u32,
     request: &RenderRequest,
 ) -> FfiResult<RenderedScreenshot> {
+    if !has_area(page) {
+        return Err(no_visible_area(page_num));
+    }
     let user_unit = page.user_unit();
     let page_width = page.width() * user_unit;
     let page_height = page.height() * user_unit;
