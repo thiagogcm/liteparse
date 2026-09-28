@@ -20,6 +20,8 @@ use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
 
 /// One element of a page's structure tree, in the pre-order the core walks.
 struct ScopedElement {
+    /// The element's role, as extraction reports it.
+    role: String,
     /// The ids of the element's content on the tree's page, in `/K` order.
     ids: Vec<i32>,
     /// How many of its children are elements of the tree.
@@ -80,7 +82,16 @@ fn scope_page(document: &Document<'_>, page: &mut ExtractedPage) -> FfiResult {
     let pdf_page = document.page(number as i32 - 1)?;
     let elements = scoped_elements(&pdf_page);
 
-    if page.struct_nodes.len() != elements.len() {
+    // The walks must meet node for node: same count, same roles in the same
+    // order, same shape. Anything else is not the tree extraction read, and
+    // writing ids by position onto it would be a guess.
+    if page.struct_nodes.len() != elements.len()
+        || page
+            .struct_nodes
+            .iter()
+            .zip(&elements)
+            .any(|(node, element)| node.role != element.role)
+    {
         return Err(mismatch());
     }
     if !elements.is_empty() {
@@ -122,7 +133,7 @@ fn scope_element<'a>(
     scoped: &mut impl Iterator<Item = &'a ScopedElement>,
 ) -> Option<()> {
     let own = scoped.next()?;
-    if own.children != element.children.len() {
+    if own.role != element.element_type || own.children != element.children.len() {
         return None;
     }
     element.marked_content_ids.clone_from(&own.ids);
@@ -167,6 +178,7 @@ unsafe fn walk(
     let mut ids = Vec::new();
     let mut children = Vec::new();
     // SAFETY: the caller guarantees `element` is live.
+    let role = unsafe { element_type(pdfium, element) };
     unsafe {
         for index in 0..(pdfium.FPDF_StructElement_CountChildren)(element) {
             let id = (pdfium.FPDF_StructElement_GetChildMarkedContentID)(element, index);
@@ -180,6 +192,7 @@ unsafe fn walk(
         }
     }
     out.push(ScopedElement {
+        role,
         ids,
         children: children.len(),
     });
@@ -187,6 +200,38 @@ unsafe fn walk(
         // SAFETY: a child of a live element of the same open tree.
         unsafe { walk(pdfium, child, out) };
     }
+}
+
+/// `element`'s role as `FPDF_StructElement_GetType` spells it, decoded the
+/// way the core decodes it: UTF-16LE, trailing NULs dropped.
+///
+/// # Safety
+///
+/// `element` must belong to an open structure tree.
+unsafe fn element_type(
+    pdfium: &pdfium_sys::dynamic::PdfiumBindings,
+    element: pdfium_sys::FPDF_STRUCTELEMENT,
+) -> String {
+    // SAFETY: the caller guarantees `element` is live. A null buffer asks
+    // only for the length.
+    let needed =
+        unsafe { (pdfium.FPDF_StructElement_GetType)(element, std::ptr::null_mut(), 0) } as usize;
+    if needed < 2 {
+        return String::new();
+    }
+    let mut buffer = vec![0u16; needed / 2];
+    // SAFETY: as above, and `buffer` holds the `needed` bytes PDFium asked for.
+    let written = unsafe {
+        (pdfium.FPDF_StructElement_GetType)(element, buffer.as_mut_ptr().cast(), needed as _)
+    } as usize;
+    if written < 2 {
+        return String::new();
+    }
+    let mut end = (written / 2).min(buffer.len());
+    while end > 0 && buffer[end - 1] == 0 {
+        end -= 1;
+    }
+    String::from_utf16_lossy(&buffer[..end])
 }
 
 #[cfg(test)]
@@ -284,6 +329,143 @@ mod tests {
                /DA (/Helv 12 Tf 0 g) /Rect [300 400 500 420] /F 4 /P 3 0 R /AP << /N 15 0 R >> >>",
             &appearance,
         ])
+    }
+
+    /// One tagged page, every element's content on it: a heading, a
+    /// two-item list three levels deep and a closing paragraph, so the core
+    /// reads every id right and the walks must meet node for node.
+    fn nested_fixture() -> Vec<u8> {
+        let content = stream(
+            b"BT /F1 18 Tf 72 720 Td /H1 << /MCID 0 >> BDC (Title) Tj EMC ET\n\
+              BT /F1 12 Tf 72 680 Td /Lbl << /MCID 1 >> BDC (1.) Tj EMC ET\n\
+              BT /F1 12 Tf 92 680 Td /LBody << /MCID 2 >> BDC (First item) Tj EMC ET\n\
+              BT /F1 12 Tf 72 660 Td /Lbl << /MCID 3 >> BDC (2.) Tj EMC ET\n\
+              BT /F1 12 Tf 92 660 Td /LBody << /MCID 4 >> BDC (Second item) Tj EMC ET\n\
+              BT /F1 12 Tf 72 620 Td /P << /MCID 5 >> BDC (Closing) Tj EMC ET",
+        );
+        assemble(&[
+            b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+               /Resources << /Font << /F1 6 0 R >> >> /StructParents 0 >>",
+            &content,
+            b"<< /Type /StructTreeRoot /K [7 0 R] /ParentTree 18 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Type /StructElem /S /Document /P 5 0 R /K [8 0 R] >>",
+            b"<< /Type /StructElem /S /Sect /P 7 0 R /Pg 3 0 R /K [9 0 R 10 0 R 17 0 R] >>",
+            b"<< /Type /StructElem /S /H1 /P 8 0 R /Pg 3 0 R /K 0 >>",
+            b"<< /Type /StructElem /S /L /P 8 0 R /Pg 3 0 R /K [11 0 R 12 0 R] >>",
+            b"<< /Type /StructElem /S /LI /P 10 0 R /Pg 3 0 R /K [13 0 R 14 0 R] >>",
+            b"<< /Type /StructElem /S /LI /P 10 0 R /Pg 3 0 R /K [15 0 R 16 0 R] >>",
+            b"<< /Type /StructElem /S /Lbl /P 11 0 R /Pg 3 0 R /K 1 >>",
+            b"<< /Type /StructElem /S /LBody /P 11 0 R /Pg 3 0 R /K 2 >>",
+            b"<< /Type /StructElem /S /Lbl /P 12 0 R /Pg 3 0 R /K 3 >>",
+            b"<< /Type /StructElem /S /LBody /P 12 0 R /Pg 3 0 R /K 4 >>",
+            b"<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K 5 >>",
+            b"<< /Nums [0 [9 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R]] >>",
+        ])
+    }
+
+    /// Extract `pdf` with its structure tree, and scope the result.
+    fn extract_and_scope(
+        pdf: Vec<u8>,
+        tamper: impl FnOnce(&mut ExtractedPages),
+    ) -> (ExtractedPages, FfiResult<ExtractedPages>) {
+        let lib = Library::try_init().unwrap();
+        let input = PdfInput::Bytes(pdf);
+        let document = stages::open(&lib, &input, None, &[]).unwrap();
+        let core = stages::extract(&document, &request()).unwrap();
+        let mut scoped = core.clone();
+        tamper(&mut scoped);
+        let outcome = scope_marked_content_ids(&document, &mut scoped, || {
+            Ok(stages::open(&lib, &input, None, &[]).unwrap())
+        })
+        .map(|()| scoped);
+        (core, outcome)
+    }
+
+    #[test]
+    fn the_walk_meets_extraction_node_for_node() {
+        let (core, scoped) = extract_and_scope(nested_fixture(), |_| {});
+        let scoped = scoped.unwrap();
+        let (before, after) = (&core.pages[0], &scoped.pages[0]);
+        let roles = |page: &ExtractedPage| {
+            page.struct_nodes
+                .iter()
+                .map(|node| (node.role.clone(), node.mcids.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(roles(after), roles(before));
+        assert_eq!(
+            roles(after)
+                .iter()
+                .map(|(role, _)| role.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Document", "Sect", "H1", "L", "LI", "Lbl", "LBody", "LI", "Lbl", "LBody", "P"
+            ]
+        );
+        let bits = |page: &ExtractedPage| {
+            page.struct_nodes
+                .iter()
+                .map(|node| {
+                    node.bbox
+                        .as_ref()
+                        .map(|r| [r.x, r.y, r.width, r.height].map(f32::to_bits))
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(after), bits(before));
+        let (mut tree_before, mut tree_after) = (Vec::new(), Vec::new());
+        tree_ids(
+            &before.structure_tree.as_ref().unwrap().roots,
+            &mut tree_before,
+        );
+        tree_ids(
+            &after.structure_tree.as_ref().unwrap().roots,
+            &mut tree_after,
+        );
+        assert_eq!(tree_after, tree_before);
+    }
+
+    #[test]
+    fn a_walk_that_disagrees_with_extraction_is_an_error() {
+        type Tamper = fn(&mut ExtractedPages);
+        let tampers: [(&str, Tamper); 5] = [
+            ("a struct node fewer", |pages| {
+                pages.pages[0].struct_nodes.pop();
+            }),
+            ("struct nodes out of order", |pages| {
+                pages.pages[0].struct_nodes.swap(2, 3);
+            }),
+            ("a tree element fewer", |pages| {
+                let tree = pages.pages[0].structure_tree.as_mut().unwrap();
+                tree.roots[0].children[0].children.pop();
+            }),
+            ("tree children out of order", |pages| {
+                let tree = pages.pages[0].structure_tree.as_mut().unwrap();
+                tree.roots[0].children[0].children.swap(0, 1);
+            }),
+            ("a tree root more", |pages| {
+                let tree = pages.pages[0].structure_tree.as_mut().unwrap();
+                let extra = tree.roots[0].clone();
+                tree.roots.push(extra);
+            }),
+        ];
+        for (case, tamper) in tampers {
+            let (_, outcome) = extract_and_scope(nested_fixture(), tamper);
+            let error = outcome
+                .err()
+                .unwrap_or_else(|| panic!("{case}: scoped anyway"));
+            assert_eq!(error.status, LITEPARSE_STATUS_PARSE_ERROR, "{case}");
+            assert!(
+                error
+                    .message
+                    .contains("read differently than at extraction"),
+                "{case}: {}",
+                error.message
+            );
+        }
     }
 
     fn request() -> ExtractRequest<'static> {
