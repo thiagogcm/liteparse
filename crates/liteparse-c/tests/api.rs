@@ -109,6 +109,27 @@ fn zero_area_page_pdf() -> Vec<u8> {
     ])
 }
 
+/// Three pages whose second holds a filled text widget, with or without the
+/// `/AcroForm` that should list its field: without it the widget is
+/// orphaned, and liteparse repairs the catalog to read the field.
+fn widget_on_second_page_pdf(acroform: bool) -> Vec<u8> {
+    let catalog = if acroform {
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>"
+    } else {
+        "<< /Type /Catalog /Pages 2 0 R >>"
+    };
+    assemble(&[
+        catalog.as_bytes().to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [6 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (customer_name) /V (Ada Lovelace) \
+           /Rect [72 700 300 720] /F 4 /P 4 0 R >>"
+            .to_vec(),
+    ])
+}
+
 fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     let mut out = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
     out.extend_from_slice(data);
@@ -727,7 +748,18 @@ fn check_result_ranges(view: &LiteParseResultView) {
     let shots = arr(view.screenshots, view.screenshots_len);
     let rects = arr(view.screenshot_rects, view.screenshot_rects_len);
     let _ = arr(view.xfa_packets, view.xfa_packets_len);
-    let _ = arr(view.flattened_page_numbers, view.flattened_page_numbers_len);
+    let numbers: Vec<u32> = pages.iter().map(|page| page.page_number).collect();
+    for signal in [
+        arr(view.flattened_page_numbers, view.flattened_page_numbers_len),
+        arr(view.repaired_page_numbers, view.repaired_page_numbers_len),
+    ] {
+        assert!(signal.is_sorted());
+        assert!(signal.iter().all(|number| numbers.contains(number)));
+    }
+    assert!(
+        view.repaired_page_numbers_len == 0
+            || view.flags & LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM != 0
+    );
     for output in outputs {
         check_str(view, output.text);
         check_str(view, output.markdown);
@@ -3349,4 +3381,77 @@ fn render_ocr_rounds(document: &Document, selection: &[u32]) -> (Vec<u32>, usize
     let result = job.finish().unwrap();
     assert_eq!(result.view().content.arenas.page_errors_len, 0);
     (rendered, result.pages().len())
+}
+
+// ---------------------------------------------------------------------------
+// Form recovery signals
+
+fn form_fields_of<'a>(result: &'a Res, page: &LiteParsePage) -> &'a [LiteParseFormField] {
+    let view = result.view();
+    range(
+        arr(view.content.form_fields, view.content.form_fields_len),
+        page.form_field_offset,
+        page.form_field_count,
+    )
+}
+
+#[test]
+fn acroform_repair_is_reported_with_the_pages_it_made_readable() {
+    let parser = Parser::new(|c| c.options |= LITEPARSE_FLAG_EXTRACT_FORM_FIELDS);
+    let document = parser.open_bytes(&widget_on_second_page_pdf(false));
+    let job = document.begin(&[]).finish().unwrap();
+    for result in [document.parse(&[]), document.extract(&[]), job] {
+        let view = result.view();
+        check_result_ranges(view);
+        assert_ne!(view.flags & LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM, 0);
+        assert_eq!(
+            arr(view.repaired_page_numbers, view.repaired_page_numbers_len),
+            [2]
+        );
+        // The repaired copy is what extraction read: it has an AcroForm.
+        assert_eq!(view.form_type, LITEPARSE_FORM_TYPE_ACRO_FORM);
+        let fields = form_fields_of(&result, &result.pages()[1]);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(pooled(view, fields[0].value), "Ada Lovelace");
+    }
+
+    // The repair is the document's, whatever the selection holds.
+    let first = document.parse(&[1]);
+    assert_ne!(
+        first.view().flags & LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM,
+        0
+    );
+    assert_eq!(first.view().repaired_page_numbers_len, 0);
+}
+
+#[test]
+fn acroform_repair_is_not_reported_when_nothing_was_repaired() {
+    let healthy = Parser::new(|c| c.options |= LITEPARSE_FLAG_EXTRACT_FORM_FIELDS)
+        .open_bytes(&widget_on_second_page_pdf(true));
+    // Without form-field extraction the orphaned widget is never repaired.
+    let unread = Parser::plain().open_bytes(&widget_on_second_page_pdf(false));
+    for document in [healthy, unread] {
+        for result in [document.parse(&[]), document.extract(&[])] {
+            let view = result.view();
+            assert_eq!(view.flags & LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM, 0);
+            assert_eq!(view.repaired_page_numbers_len, 0);
+        }
+    }
+}
+
+#[test]
+fn flattened_form_widgets_are_reported_on_parse_and_extract() {
+    let document = Parser::plain().open("filled_acroform.pdf");
+    let parsed = document.parse(&[]);
+    let extracted = document.extract(&[]);
+    let flattened = |result: &Res| {
+        let view = result.view();
+        (
+            view.flags & LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS != 0,
+            arr(view.flattened_page_numbers, view.flattened_page_numbers_len).to_vec(),
+        )
+    };
+    let (flagged, pages) = flattened(&parsed);
+    assert!(flagged && !pages.is_empty());
+    assert_eq!(flattened(&parsed), flattened(&extracted));
 }

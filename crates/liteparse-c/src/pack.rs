@@ -55,6 +55,7 @@ pub(crate) struct Packed {
     pub screenshot_rects: Vec<LiteParseScreenshotRect>,
     pub xfa_packets: Vec<LiteParseXfaPacket>,
     pub flattened_page_numbers: Vec<u32>,
+    pub repaired_page_numbers: Vec<u32>,
 }
 
 /// The page fields shared by extraction `Page` and `ParsedPage`.
@@ -210,6 +211,7 @@ impl Packed {
             bytes_of(&self.screenshot_rects),
             bytes_of(&self.xfa_packets),
             bytes_of(&self.flattened_page_numbers),
+            bytes_of(&self.repaired_page_numbers),
         ];
         arrays.iter().sum()
     }
