@@ -59,6 +59,45 @@ fn tagged_heading_pdf() -> Vec<u8> {
     ])
 }
 
+/// Two tagged pages that draw MCIDs 0 and 1 each, joined to a list body that
+/// spans them. The body owns page 1's MCID 1 as a bare kid under its own
+/// `/Pg` and page 2's MCID 0 through an MCR with its own `/Pg`, and parents
+/// the paragraph that owns page 2's MCID 1; page 1's MCID 0 is an unrelated
+/// paragraph's. The body sits in both pages' trees, so a reader that ignores
+/// each kid's page claims both of its numbers on both pages, where the other
+/// number belongs to someone else.
+fn cross_page_structure_pdf() -> Vec<u8> {
+    let page1 = b"BT /F1 12 Tf 72 700 Td /P << /MCID 0 >> BDC (Opening paragraph.) Tj EMC ET\n\
+                  BT /F1 12 Tf 72 600 Td /LBody << /MCID 1 >> BDC (Body starts here.) Tj EMC ET";
+    let page2 = b"BT /F1 12 Tf 72 700 Td /LBody << /MCID 0 >> BDC (Body ends here.) Tj EMC ET\n\
+                  BT /F1 12 Tf 72 600 Td /P << /MCID 1 >> BDC (Nested paragraph.) Tj EMC ET";
+    let page = |contents: u32, parents: u32| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} 0 R \
+             /Resources << /Font << /F1 12 0 R >> >> /StructParents {parents} >>"
+        )
+        .into_bytes()
+    };
+    assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 7 0 R >>"
+            .to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        page(5, 0),
+        page(6, 1),
+        stream("", page1),
+        stream("", page2),
+        b"<< /Type /StructTreeRoot /K [8 0 R] /ParentTree 13 0 R >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 7 0 R /K [9 0 R 10 0 R] >>".to_vec(),
+        b"<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K 0 >>".to_vec(),
+        b"<< /Type /StructElem /S /LBody /P 8 0 R /Pg 3 0 R \
+           /K [1 << /Type /MCR /Pg 4 0 R /MCID 0 >> 11 0 R] >>"
+            .to_vec(),
+        b"<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K 1 >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Nums [0 [9 0 R 10 0 R] 1 [10 0 R 11 0 R]] >>".to_vec(),
+    ])
+}
+
 fn outlined_two_page_pdf() -> Vec<u8> {
     assemble(&[
         b"<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>".to_vec(),
@@ -2679,6 +2718,99 @@ fn structure_tree_and_mcids_pack_with_absolute_parents() {
         reparsed.text().contains("# Hello"),
         "text was: {}",
         reparsed.text()
+    );
+}
+
+#[test]
+fn structure_mcids_stay_on_their_own_page_when_an_element_spans_pages() {
+    let parser = Parser::new(|c| {
+        c.options |= LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE;
+    });
+    let document = parser.open_bytes(&cross_page_structure_pdf());
+    let staged = document.begin(&[]).finish().unwrap();
+    for result in [document.extract(&[]), document.parse(&[]), staged] {
+        assert_page_scoped_structure(&result);
+    }
+}
+
+/// Each page of a [`cross_page_structure_pdf`] result carries only its own
+/// MCIDs, in both the structure tree and the struct nodes, and the body's
+/// page-1 box covers only its own content.
+fn assert_page_scoped_structure(extracted: &Res) {
+    let view = extracted.view();
+    check_result_ranges(view);
+    let mcids = arr(view.content.mcids, view.content.mcids_len);
+    let structure_nodes = arr(
+        view.content.structure_nodes,
+        view.content.structure_nodes_len,
+    );
+    let struct_nodes = arr(view.content.struct_nodes, view.content.struct_nodes_len);
+    let owned = |tag: LiteParseStr, offset: u32, count: u32| {
+        (pooled(view, tag), range(mcids, offset, count).to_vec())
+    };
+
+    // Pre-order (tag, MCIDs) per page: the body is in both trees, with one id on each.
+    let expected: [&[(&str, &[i32])]; 2] = [
+        &[("Document", &[]), ("P", &[0]), ("LBody", &[1])],
+        &[("Document", &[]), ("LBody", &[0]), ("P", &[1])],
+    ];
+    let pages = extracted.pages();
+    assert_eq!(pages.len(), 2);
+    for (page, expected) in pages.iter().zip(expected) {
+        let expected = expected
+            .iter()
+            .map(|(tag, ids)| (tag.to_string(), ids.to_vec()))
+            .collect::<Vec<_>>();
+        let tree = range(
+            structure_nodes,
+            page.structure_node_offset,
+            page.structure_node_count,
+        )
+        .iter()
+        .map(|n| owned(n.element_type, n.mcid_offset, n.mcid_count))
+        .collect::<Vec<_>>();
+        assert_eq!(
+            tree, expected,
+            "structure tree of page {}",
+            page.page_number
+        );
+        let hints = range(
+            struct_nodes,
+            page.struct_node_offset,
+            page.struct_node_count,
+        )
+        .iter()
+        .map(|n| owned(n.role, n.mcid_offset, n.mcid_count))
+        .collect::<Vec<_>>();
+        assert_eq!(hints, expected, "struct nodes of page {}", page.page_number);
+    }
+
+    // The body's page-1 box is its own line's: its page-2 MCID 0 names the
+    // opening paragraph on page 1, and must not stretch the box up to it.
+    let first = &pages[0];
+    let body = range(
+        struct_nodes,
+        first.struct_node_offset,
+        first.struct_node_count,
+    )
+    .iter()
+    .find(|n| pooled(view, n.role) == "LBody")
+    .unwrap();
+    assert_ne!(body.flags & LITEPARSE_STRUCT_NODE_FLAG_HAS_BBOX, 0);
+    let opening = range(
+        arr(view.content.items, view.content.items_len),
+        first.item_offset,
+        first.item_count,
+    )
+    .iter()
+    .find(|i| pooled(view, i.text).starts_with("Opening"))
+    .unwrap();
+    assert!(
+        body.bbox.y > opening.y + opening.height,
+        "body box {:?} reaches the opening line at y {}..{}",
+        body.bbox,
+        opening.y,
+        opening.y + opening.height
     );
 }
 

@@ -386,7 +386,8 @@ pub struct LiteParseGraphic {
 }
 
 /// One pre-order structure-tree node used for heading and figure detection.
-/// `mcid_offset/count` index the view's `mcids` array.
+/// `mcid_offset/count` index the view's `mcids` array: the ids of the node's
+/// content on its page, which `bbox` unions.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseStructNode {
@@ -479,7 +480,10 @@ pub struct LiteParseFormField {
 /// One tagged-PDF structure element, flattened in pre-order (parent before
 /// children). `parent_index` is an absolute index into the view's
 /// `structure_nodes` array or `LITEPARSE_NO_PARENT`. Ranges index the view's
-/// `mcids`, `structure_attributes`, and `annotations` arrays.
+/// `mcids`, `structure_attributes`, and `annotations` arrays. A page's tree
+/// holds the elements with content on the page and their ancestors, so an
+/// element that spans pages appears in each; its `mcids` range lists only the
+/// ids of its content on that page.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseStructureNode {

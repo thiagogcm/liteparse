@@ -35,6 +35,7 @@ use crate::result::LiteParseResult;
 use crate::result::{FormRecovery, PageGeometries, ResultState};
 use crate::runtime::block_on;
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
+use crate::structure::scope_marked_content_ids;
 
 /// One parse in progress: everything `parse` computes before OCR, carried
 /// across OCR rounds. Holds no PDFium resource between calls.
@@ -84,7 +85,9 @@ impl Job {
         let xfa_packets = config
             .extract_xfa_packets
             .then(|| stages::xfa_packets(&document));
-        let extracted = stages::extract(&document, &core.extract_request(pages, config.max_pages))?;
+        let mut extracted =
+            stages::extract(&document, &core.extract_request(pages, config.max_pages))?;
+        scope_marked_content_ids(&document, &mut extracted, || source.open(&lib, input))?;
         let ocr_options = core.ocr_render_options(false, &extracted);
         let forms = FormRecovery::of(&extracted, source.repaired_input(&lib).is_some());
         let screenshot_options = core.screenshot_options(false);
