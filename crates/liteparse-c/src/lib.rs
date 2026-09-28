@@ -21,6 +21,7 @@ pub mod result;
 mod runtime;
 pub mod screenshots;
 pub mod status;
+mod structure;
 
 pub use abi::*;
 pub use budget::*;

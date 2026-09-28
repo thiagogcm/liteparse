@@ -204,7 +204,13 @@ outputs. Every string in the result is a `LiteParseStr` range into
 
 Text metadata (font metrics, colors, char codes, marked-content ids) is
 always exported when the core holds it; `LITEPARSE_RESULT_FLAG_TEXT_METADATA`
-reports whether it was requested. Search and JSON serialization are left to
+reports whether it was requested.
+
+Struct nodes and structure trees are per page. A page's tree holds the
+tagged elements with content on it and their ancestors, and every element's
+marked-content ids are those of its content on that page: an MCID only names
+content within one page, so an element that spans pages appears on each with
+that page's ids. Search and JSON serialization are left to
 the caller, which has every text item and field in the arrays.
 
 `liteparse_document_extract` returns a result with

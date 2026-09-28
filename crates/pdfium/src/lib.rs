@@ -20,7 +20,10 @@ pub use page::{
     PdfAnnotation, PdfFormField, PdfLink, SegmentKind, ViewportTransform,
 };
 pub use page_object::{ImageMetadata, PageObject, PageObjectKind, PathDrawMode, RawPathSegment};
-pub use struct_tree::{StructNode, StructureAttributeValue, StructureElement, StructureTree};
+pub use struct_tree::{
+    StructNode, StructureAttributeValue, StructureElement, StructureTree, collect_mcid_bboxes,
+    union_mcid_bboxes,
+};
 pub use text_page::{TextChar, TextCharIter, TextPage};
 pub use types::*;
 

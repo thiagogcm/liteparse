@@ -302,7 +302,7 @@ where
 
 /// Pre-scan all page objects on the page, building `mcid → union(bbox)` in
 /// viewport space. Each struct node then unions the bboxes for its own mcids.
-fn collect_mcid_bboxes(
+pub fn collect_mcid_bboxes(
     page: &Page<'_, '_>,
     view_box: &RectF,
 ) -> std::collections::HashMap<i32, RectF> {
@@ -413,7 +413,7 @@ fn walk_element(
     }
 }
 
-fn union_mcid_bboxes(
+pub fn union_mcid_bboxes(
     mcids: &[i32],
     mcid_bboxes: &std::collections::HashMap<i32, RectF>,
 ) -> Option<RectF> {
