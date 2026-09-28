@@ -478,8 +478,10 @@ fn copy_geometry(
         where_,
         "geometry",
     )?;
-    if geometry.box_left >= geometry.box_right
-        || geometry.box_bottom >= geometry.box_top
+    // An empty box is ordered: it is what extraction reports for a page
+    // whose crop box misses its media box.
+    if geometry.box_left > geometry.box_right
+        || geometry.box_bottom > geometry.box_top
         || geometry.user_unit <= 0.0
         || geometry.rotation_quarter_turns >= 4
     {
@@ -589,13 +591,12 @@ unsafe fn copy_page(page: &LiteParsePage, where_: &str, arrays: &Arrays<'_>) -> 
             "{where_}.page_number must be 1-based"
         )));
     }
-    if !page.width.is_finite()
-        || !page.height.is_finite()
-        || page.width <= 0.0
-        || page.height <= 0.0
+    // Zero is a real size: extraction reports it for a page whose visible
+    // box is empty, and what extraction reports must pass back unchanged.
+    if !page.width.is_finite() || !page.height.is_finite() || page.width < 0.0 || page.height < 0.0
     {
         return Err(FfiError::invalid_argument(format!(
-            "{where_} width and height must be finite and greater than zero"
+            "{where_} width and height must be finite and non-negative"
         )));
     }
 

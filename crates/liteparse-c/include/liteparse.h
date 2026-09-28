@@ -1199,7 +1199,9 @@ typedef struct {
    */
   uint32_t flags;
   /**
-   * Viewport size in 72-DPI points.
+   * Viewport size in 72-DPI points. Zero along an axis where the visible
+   * box is empty, as for a crop box that misses the media box: such a
+   * page is extracted and parsed like any other but cannot be rendered.
    */
   float width;
   float height;

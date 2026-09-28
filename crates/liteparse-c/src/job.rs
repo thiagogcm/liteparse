@@ -12,7 +12,7 @@ use liteparse::stages::{
 };
 use liteparse::types::{DocumentMetadata, ExtractedImage, Page, PageError, XfaPacket};
 use liteparse::{LiteParse as CoreLiteParse, ParseResult, ScreenshotResult};
-use liteparse_pdfium::Library;
+use liteparse_pdfium::{Document, Library};
 
 use crate::budget::{bytes_of, check_result_bytes};
 use crate::complexity::page_complexity;
@@ -28,7 +28,8 @@ use crate::ocr::{
 };
 use crate::records::{LiteParsePageGeometry, LiteParseRect, flag_bits};
 use crate::render::{
-    LITEPARSE_MAX_RASTER_BYTES_PER_OPERATION, page_geometry, preflight_parse_screenshots,
+    LITEPARSE_MAX_RASTER_BYTES_PER_OPERATION, no_visible_area, page_geometry,
+    preflight_parse_screenshots,
 };
 use crate::result::LiteParseResult;
 use crate::result::{PageGeometries, ResultState};
@@ -115,11 +116,30 @@ impl Job {
             }
         }
         let screenshots = if config.extract_screenshots {
-            let numbers: Vec<u32> = pages.iter().map(|page| page.page_number as u32).collect();
-            preflight_parse_screenshots(analysis, Some(&numbers), config)?;
-            per_page_on_failure(&numbers, tolerant, &mut page_errors, |numbers| {
-                stages::screenshots(analysis, Some(numbers), &screenshot_options)
-            })?
+            // A page with no visible area has no pixels: it fails alone, and
+            // the renderer is never asked for it.
+            let mut numbers = Vec::with_capacity(pages.len());
+            for page in &pages {
+                let number = page.page_number as u32;
+                if has_area(page) {
+                    numbers.push(number);
+                } else if tolerant {
+                    page_errors.push(PageError {
+                        page_number: number,
+                        message: no_visible_area(number).message,
+                    });
+                } else {
+                    return Err(no_visible_area(number));
+                }
+            }
+            if numbers.is_empty() {
+                Vec::new()
+            } else {
+                preflight_parse_screenshots(analysis, Some(&numbers), config)?;
+                per_page_on_failure(&numbers, tolerant, &mut page_errors, |numbers| {
+                    stages::screenshots(analysis, Some(numbers), &screenshot_options)
+                })?
+            }
         } else {
             Vec::new()
         };
@@ -175,7 +195,7 @@ impl Job {
         let lib = Library::try_init()?;
         let input = self.source.extraction_input(&lib);
         let document = self.source.open(&lib, input)?;
-        let failure = match stages::render_for_ocr(&document, &self.pages, self.cursor, &options) {
+        let failure = match self.render_with_area(&document, &options) {
             Ok((rasters, next)) => {
                 self.cursor = next;
                 return Ok((rasters, Vec::new()));
@@ -198,6 +218,9 @@ impl Job {
         let mut errors = Vec::new();
         let mut next = self.pages.len();
         for index in self.cursor..self.pages.len() {
+            if !has_area(&self.pages[index]) {
+                continue;
+            }
             let page = &self.pages[index..=index];
             match stages::render_for_ocr(&document, page, 0, &single) {
                 Ok((rendered, _)) => rasters.extend(rendered),
@@ -211,6 +234,44 @@ impl Job {
         self.cursor = next;
         self.page_errors.extend(errors.iter().cloned());
         Ok((rasters, errors))
+    }
+
+    /// Render from the cursor as `options` asks, never handing the core a
+    /// page with no visible area: it shows nothing to recognise and has no
+    /// raster PDFium could allocate. Each core call ends before the next
+    /// such page, which is stepped over. Returns the rasters and the index
+    /// to resume from.
+    fn render_with_area(
+        &self,
+        document: &Document<'_>,
+        options: &OcrRenderOptions,
+    ) -> Result<(Vec<OcrRaster>, usize), LiteParseError> {
+        let unbounded = options.max_rasters == 0;
+        let mut rasters = Vec::new();
+        let mut cursor = self.cursor;
+        while cursor < self.pages.len() && (unbounded || rasters.len() < options.max_rasters) {
+            if !has_area(&self.pages[cursor]) {
+                cursor += 1;
+                continue;
+            }
+            let end = self.pages[cursor..]
+                .iter()
+                .position(|page| !has_area(page))
+                .map_or(self.pages.len(), |offset| cursor + offset);
+            let run = OcrRenderOptions {
+                max_rasters: if unbounded {
+                    0
+                } else {
+                    options.max_rasters - rasters.len()
+                },
+                ..options.clone()
+            };
+            let (rendered, next) =
+                stages::render_for_ocr(document, &self.pages[..end], cursor, &run)?;
+            rasters.extend(rendered);
+            cursor = next;
+        }
+        Ok((rasters, cursor))
     }
 
     /// Explicit pages must belong to the job. Rounds only move forward, so
@@ -348,6 +409,12 @@ impl Job {
         result.xfa_packets = self.xfa_packets;
         (result, geometries)
     }
+}
+
+/// Whether `page` has a visible area. A crop box that misses the media box
+/// leaves none, and extraction measures such a page 0x0.
+fn has_area(page: &Page) -> bool {
+    page.page_width > 0.0 && page.page_height > 0.0
 }
 
 /// Bytes of `page` rendered in RGB at `dpi`.

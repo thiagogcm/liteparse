@@ -192,7 +192,11 @@ rects, item frames, projected lines and spans, and the XY-cut region tree.
 `LiteParsePage` carries a range into every page-scoped content array, the
 page label, geometry (visible box, user unit, rotation), content bounds, and
 inline complexity. Its `HAS_*` flags distinguish "extraction enabled, none
-found" from "disabled". `page_outputs[i]` holds the text, Markdown (under
+found" from "disabled". A page whose visible box is empty, such as one whose
+crop box misses its media box, is still a page: it is extracted and parsed
+with zero width and height, an empty visible box, and whatever content lies
+inside that box (normally none). It has no pixels, so OCR skips it and a
+screenshot of it fails as a page error. `page_outputs[i]` holds the text, Markdown (under
 `LITEPARSE_OUTPUT_FORMAT_MARKDOWN`), and figure, item-frame, projected-line,
 and region ranges of `content.pages[i]`; extract-only results have no page
 outputs. Every string in the result is a `LiteParseStr` range into
@@ -268,9 +272,11 @@ during the call.
 `content.total_pages` is the source document page count before page
 selection. Every page number, outline target, and page error must lie within
 it, so content with pages needs a non-zero count. Supplied outline, page geometry,
-images, complexity, and page errors survive projection. A flagged page
-geometry must have finite ordered box edges, positive user unit, and a
-quarter-turn rotation from zero through three.
+images, complexity, and page errors survive projection. Page width and
+height must be finite and non-negative. A flagged page geometry must have
+finite ordered box edges (an empty box, as a zero-area page reports, is
+ordered), positive user unit, and a quarter-turn rotation from zero through
+three.
 
 Caller-supplied content is limited to 100,000 pages, 256 MiB of flat input
 arrays (including its string pool), and 256 MiB of copies. Ranges may alias,
@@ -339,7 +345,7 @@ into it.
    `LITEPARSE_OCR_PIXEL_FORMAT_RGB` or `_GRAYSCALE`. Rounds move forward
    through the job's pages. The core OCR predicates choose the pages; a
    non-empty `pages` list names job pages and renders only those not yet
-   passed. Repeat the same list on every call until an empty round. Each
+   passed. A page with no area is never rendered. Repeat the same list on every call until an empty round. Each
    `LiteParseOcrRaster` carries its page number, dimensions, effective DPI,
    a native-text flag, embedded image rectangles,
    and tightly packed pixels in `view->arenas.binary`. Render failures under
