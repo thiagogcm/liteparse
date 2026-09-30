@@ -390,9 +390,9 @@ pub unsafe extern "C" fn liteparse_document_parse(
 }
 
 /// Extract pre-projection pages: heuristic text items, graphics, and the
-/// configured extras, with no projection, OCR, text, or Markdown. Link
-/// stamping and word boxes follow the same rules as parse (links only under
-/// Markdown; word boxes when requested or under Markdown). The view's
+/// configured extras, with no projection, OCR, text, or Markdown. Links are
+/// stamped as parse stamps them, only under Markdown, and every text item
+/// carries its word boxes. The view's
 /// `content` is valid `LiteParseContentInput.content` for
 /// `liteparse_parser_parse_content` to project and classify.
 ///
