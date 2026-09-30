@@ -11,9 +11,11 @@ mod extract;
 pub mod handle;
 pub mod job;
 pub mod ocr;
+mod outline;
 mod pack;
 pub mod page_objects;
 pub mod parser;
+mod raw;
 pub mod raw_text;
 pub mod records;
 mod render;
@@ -22,6 +24,8 @@ mod runtime;
 pub mod screenshots;
 pub mod status;
 mod structure;
+#[cfg(test)]
+mod test_pdf;
 
 pub use abi::*;
 pub use budget::*;

@@ -13,18 +13,17 @@
 //! projects them.
 //!
 //! The pdfium crate hands out no raw page of its own documents, so the trees
-//! are walked on a raw PDFium document this module opens on the same input.
-//! That copy is never flattened, which is also the state extraction read
-//! structure in: it reads a page's structure before flattening its widgets.
+//! are walked on a [raw copy](crate::raw) of the same input. That copy is
+//! never flattened, which is also the state extraction read structure in: it
+//! reads a page's structure before flattening its widgets.
 
 use std::collections::HashMap;
-use std::ffi::CString;
-use std::marker::PhantomData;
 
 use liteparse::extract::ExtractedPages;
 use liteparse::types::{Page as ExtractedPage, PdfInput, Rect, StructureTreeElement};
 use liteparse_pdfium::{Document, Library, RectF, ViewportTransform, pdfium_sys};
 
+use crate::raw::{RawDocument, RawPage};
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
 
 /// One element of a page's structure tree, in the pre-order the core walks.
@@ -62,7 +61,7 @@ pub(crate) fn scope_marked_content_ids(
             continue;
         }
         if raw.is_none() {
-            raw = Some(RawDocument::open(lib, input, password)?);
+            raw = Some(RawDocument::open(lib, input, password, "structure")?);
         }
         scope_page(document, raw.as_ref().expect("opened above"), page)?;
     }
@@ -192,90 +191,6 @@ fn union(a: &RectF, b: &RectF) -> RectF {
     }
 }
 
-/// A raw PDFium document on the extraction input, for the structure walks.
-/// Holds `'lib`, the PDFium lock, for as long as it is open.
-struct RawDocument<'lib> {
-    handle: pdfium_sys::FPDF_DOCUMENT,
-    _lock: PhantomData<&'lib Library>,
-}
-
-impl<'lib> RawDocument<'lib> {
-    /// Open `input` as the extracting document was opened. `input`'s bytes
-    /// outlive the document: both borrow from the same caller.
-    fn open(_lib: &'lib Library, input: &'lib PdfInput, password: Option<&str>) -> FfiResult<Self> {
-        let failed = || {
-            FfiError::new(
-                LITEPARSE_STATUS_PARSE_ERROR,
-                "the document could not be opened again to read its structure",
-            )
-        };
-        let password = password
-            .map(|password| CString::new(password).map_err(|_| failed()))
-            .transpose()?;
-        let password = password.as_ref().map_or(std::ptr::null(), |p| p.as_ptr());
-        let pdfium = pdfium_sys::dynamic::pdfium();
-        // SAFETY: under the PDFium lock `_lib` holds; the path and password
-        // outlive the call, and bytes outlive the document (see above).
-        let handle = unsafe {
-            match input {
-                PdfInput::Path(path) => {
-                    let path = CString::new(path.as_str()).map_err(|_| failed())?;
-                    (pdfium.FPDF_LoadDocument)(path.as_ptr(), password)
-                }
-                PdfInput::Bytes(bytes) => {
-                    let len = i32::try_from(bytes.len()).map_err(|_| failed())?;
-                    (pdfium.FPDF_LoadMemDocument)(bytes.as_ptr().cast(), len, password)
-                }
-            }
-        };
-        if handle.is_null() {
-            return Err(failed());
-        }
-        Ok(Self {
-            handle,
-            _lock: PhantomData,
-        })
-    }
-
-    fn page(&self, index: i32) -> FfiResult<RawPage<'_>> {
-        // SAFETY: the document is open.
-        let handle = unsafe { (pdfium_sys::dynamic::pdfium().FPDF_LoadPage)(self.handle, index) };
-        if handle.is_null() {
-            return Err(FfiError::new(
-                LITEPARSE_STATUS_PARSE_ERROR,
-                format!(
-                    "page {} could not be loaded to read its structure",
-                    index + 1
-                ),
-            ));
-        }
-        Ok(RawPage {
-            handle,
-            _document: PhantomData,
-        })
-    }
-}
-
-impl Drop for RawDocument<'_> {
-    fn drop(&mut self) {
-        // SAFETY: every page borrows the document, so none outlives it.
-        unsafe { (pdfium_sys::dynamic::pdfium().FPDF_CloseDocument)(self.handle) };
-    }
-}
-
-/// A page of a [`RawDocument`], closed on drop.
-struct RawPage<'doc> {
-    handle: pdfium_sys::FPDF_PAGE,
-    _document: PhantomData<&'doc ()>,
-}
-
-impl Drop for RawPage<'_> {
-    fn drop(&mut self) {
-        // SAFETY: loaded by `RawDocument::page`, which it borrows.
-        unsafe { (pdfium_sys::dynamic::pdfium().FPDF_ClosePage)(self.handle) };
-    }
-}
-
 /// Write `element`'s and its descendants' ids from `scoped`, which walks the
 /// same tree in the same pre-order; `None` when the two disagree in shape.
 fn scope_element<'a>(
@@ -393,38 +308,7 @@ mod tests {
     use liteparse_pdfium::Library;
 
     use super::*;
-
-    fn assemble(objects: &[&[u8]]) -> Vec<u8> {
-        let mut pdf = b"%PDF-1.7\n".to_vec();
-        let mut offsets = Vec::with_capacity(objects.len());
-        for (index, object) in objects.iter().enumerate() {
-            offsets.push(pdf.len());
-            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
-            pdf.extend_from_slice(object);
-            pdf.extend_from_slice(b"\nendobj\n");
-        }
-        let xref = pdf.len();
-        pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
-        pdf.extend_from_slice(b"0000000000 65535 f \n");
-        for offset in offsets {
-            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        pdf.extend_from_slice(
-            format!(
-                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF",
-                objects.len() + 1
-            )
-            .as_bytes(),
-        );
-        pdf
-    }
-
-    fn stream(data: &[u8]) -> Vec<u8> {
-        let mut out = format!("<< /Length {} >>\nstream\n", data.len()).into_bytes();
-        out.extend_from_slice(data);
-        out.extend_from_slice(b"\nendstream");
-        out
-    }
+    use crate::test_pdf::{assemble, stream};
 
     /// Two tagged pages drawing MCIDs 0 and 1 each, joined to a list body
     /// that owns page 1's MCID 1 and page 2's MCID 0, and parents the
