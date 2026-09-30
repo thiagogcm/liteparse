@@ -374,7 +374,10 @@ into it.
    recognition error. A rendered page without an input recognized nothing. Boxes must have finite, ordered edges; confidence must
    be finite and within `[0, 1]`; a flagged polygon must form a
    nondegenerate, non-self-intersecting quadrilateral inside the raster.
-   Every input is validated before the job changes. Errors become page
+   Every input is validated before the job changes. Each recognized word
+   becomes a text item, which carries its word box under the rule
+   extraction applies to native text (`LITEPARSE_FLAG_EMIT_WORD_BOXES` or
+   Markdown output). Errors become page
    errors; with `LITEPARSE_FLAG_OCR_FAILURE_FATAL` the merge fails with
    `LITEPARSE_STATUS_OCR_ERROR` when every page in the round failed and one
    had sparse native text, and the job then accepts only
