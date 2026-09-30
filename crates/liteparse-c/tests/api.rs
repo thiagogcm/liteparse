@@ -111,6 +111,22 @@ fn outlined_two_page_pdf() -> Vec<u8> {
     ])
 }
 
+/// Two pages whose outline loops: the first bookmark is its own first child
+/// and the second's `/Next` leads back to the first.
+fn looping_outline_pdf() -> Vec<u8> {
+    assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 9 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 18 Tf 72 700 Td (Looped Title) Tj ET"),
+        b"<< /Type /Outlines /First 7 0 R /Last 8 0 R /Count 2 >>".to_vec(),
+        b"<< /Title (Self) /Parent 6 0 R /First 7 0 R /Next 8 0 R /Dest [3 0 R /Fit] >>".to_vec(),
+        b"<< /Title (Back) /Parent 6 0 R /Prev 7 0 R /Next 7 0 R /Dest [4 0 R /Fit] >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ])
+}
+
 /// One page with byte-identical links in distinct PDF objects.
 fn twin_links_pdf() -> Vec<u8> {
     let link = b"<< /Type /Annot /Subtype /Link /Rect [72 700 300 720] \
@@ -1841,6 +1857,24 @@ fn selected_extract_preserves_source_outline_and_geometry_through_projection() {
         "Outlined Title"
     );
     assert!(projected.text().contains("Outlined Title"));
+}
+
+#[test]
+fn a_looping_outline_lists_each_bookmark_once() {
+    let parser = Parser::plain();
+    let document = parser.open_bytes(&looping_outline_pdf());
+    let info = document.info();
+    let outline: Vec<(String, i32, u32)> = arr(info.outline, info.outline_len)
+        .iter()
+        .map(|entry| (pooled(info, entry.title), entry.page_index, entry.level))
+        .collect();
+    assert_eq!(
+        outline,
+        [("Self".to_owned(), 0, 1), ("Back".to_owned(), 1, 1)]
+    );
+    let parsed = document.parse(&[]);
+    assert_eq!(parsed.view().content.outline_len, 2);
+    assert!(parsed.text().contains("Looped Title"));
 }
 
 #[test]
