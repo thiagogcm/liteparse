@@ -351,45 +351,43 @@
 
 #define LITEPARSE_FLAG_DETECT_SCREENSHOT_RECTS (1ull << 1)
 
-#define LITEPARSE_FLAG_EMIT_WORD_BOXES (1ull << 2)
+#define LITEPARSE_FLAG_EXTRACT_ANNOTATIONS (1ull << 2)
 
-#define LITEPARSE_FLAG_EXTRACT_ANNOTATIONS (1ull << 3)
+#define LITEPARSE_FLAG_EXTRACT_BLOCKS (1ull << 3)
 
-#define LITEPARSE_FLAG_EXTRACT_BLOCKS (1ull << 4)
+#define LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS (1ull << 4)
 
-#define LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS (1ull << 5)
+#define LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA (1ull << 5)
 
-#define LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA (1ull << 6)
+#define LITEPARSE_FLAG_EXTRACT_FORM_FIELDS (1ull << 6)
 
-#define LITEPARSE_FLAG_EXTRACT_FORM_FIELDS (1ull << 7)
+#define LITEPARSE_FLAG_EXTRACT_IMAGES (1ull << 7)
 
-#define LITEPARSE_FLAG_EXTRACT_IMAGES (1ull << 8)
+#define LITEPARSE_FLAG_EXTRACT_LINKS (1ull << 8)
 
-#define LITEPARSE_FLAG_EXTRACT_LINKS (1ull << 9)
+#define LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE (1ull << 9)
 
-#define LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE (1ull << 10)
+#define LITEPARSE_FLAG_EXTRACT_TEXT_METADATA (1ull << 10)
 
-#define LITEPARSE_FLAG_EXTRACT_TEXT_METADATA (1ull << 11)
+#define LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS (1ull << 11)
 
-#define LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS (1ull << 12)
+#define LITEPARSE_FLAG_EXTRACT_XFA_PACKETS (1ull << 12)
 
-#define LITEPARSE_FLAG_EXTRACT_XFA_PACKETS (1ull << 13)
+#define LITEPARSE_FLAG_INCLUDE_COMPLEXITY (1ull << 13)
 
-#define LITEPARSE_FLAG_INCLUDE_COMPLEXITY (1ull << 14)
+#define LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS (1ull << 14)
 
-#define LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS (1ull << 15)
+#define LITEPARSE_FLAG_OCR_ENABLED (1ull << 15)
 
-#define LITEPARSE_FLAG_OCR_ENABLED (1ull << 16)
+#define LITEPARSE_FLAG_OCR_FAILURE_FATAL (1ull << 16)
 
-#define LITEPARSE_FLAG_OCR_FAILURE_FATAL (1ull << 17)
+#define LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT (1ull << 17)
 
-#define LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT (1ull << 18)
+#define LITEPARSE_FLAG_RENDER_FORM_FIELDS (1ull << 18)
 
-#define LITEPARSE_FLAG_RENDER_FORM_FIELDS (1ull << 19)
+#define LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT (1ull << 19)
 
-#define LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT (1ull << 20)
-
-#define LITEPARSE_FLAG_EXTRACT_SCREENSHOTS (1ull << 21)
+#define LITEPARSE_FLAG_EXTRACT_SCREENSHOTS (1ull << 20)
 
 /**
  * `LiteParseDocumentInfo.flags` bit: the source was converted to PDF (an
@@ -2361,9 +2359,9 @@ LiteParseStatus liteparse_document_parse(const LiteParseDocument *document,
 
 /**
  * Extract pre-projection pages: heuristic text items, graphics, and the
- * configured extras, with no projection, OCR, text, or Markdown. Link
- * stamping and word boxes follow the same rules as parse (links only under
- * Markdown; word boxes when requested or under Markdown). The view's
+ * configured extras, with no projection, OCR, text, or Markdown. Links are
+ * stamped as parse stamps them, only under Markdown, and every text item
+ * carries its word boxes. The view's
  * `content` is valid `LiteParseContentInput.content` for
  * `liteparse_parser_parse_content` to project and classify.
  *

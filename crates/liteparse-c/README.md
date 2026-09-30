@@ -151,7 +151,7 @@ copied out of the handle with one `memcpy` per array.
   `LITEPARSE_STATUS_INVALID_ARGUMENT`; byte-view outputs are cleared on other
   failures. Null remains valid for free functions and void output helpers.
 - **Layout introspection.** `liteparse_abi_descriptor` reports pointer width, endianness, compiled capabilities, resource limits, and a layout fingerprint. The fingerprint hashes the generated header; `liteparse_abi.h` (included by `liteparse.h`) publishes it as `LITEPARSE_ABI_FINGERPRINT`, so a program can compare the two to detect a library built from a different header. `liteparse_sizeof(LITEPARSE_TYPE_*)` reports individual struct sizes.
-- **Configuration** starts with `liteparse_config_init`, which writes actual defaults. Set or clear `options` bits for boolean values; unknown bits are invalid. Core processing never writes progress output. `max_pages = 0` selects no pages; DPI must be finite and positive. `struct_size` must equal `sizeof(LiteParseConfig)`. Parser creation copies all input views.
+- **Configuration** starts with `liteparse_config_init`, which writes actual defaults. Set or clear `options` bits for boolean values; unknown bits are invalid. Core processing never writes progress output, and every text item carries its word boxes: neither is configurable. `max_pages = 0` selects no pages; DPI must be finite and positive. `struct_size` must equal `sizeof(LiteParseConfig)`. Parser creation copies all input views.
 - **Threads.** Parser and document handles may be used from several threads
   at once; destruction must wait for in-flight operations. All ABI calls are
   synchronous and block until the operation completes. Hosts should dispatch
@@ -216,8 +216,8 @@ the caller, which has every text item and field in the arrays.
 `liteparse_document_extract` returns a result with
 `LITEPARSE_RESULT_FLAG_EXTRACT_ONLY`: pre-projection pages with heuristic
 text items, graphics, and the configured extras, but no page outputs, text,
-Markdown, or projection. Link stamping and word boxes follow the parse rules (links only
-under Markdown; word boxes when requested or under Markdown).
+Markdown, or projection. Links are stamped as parse stamps them, only under Markdown, and
+every text item carries its word boxes.
 
 Parse and extract results report how extraction recovered form content.
 `LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS` and `flattened_page_numbers`
@@ -375,9 +375,8 @@ into it.
    be finite and within `[0, 1]`; a flagged polygon must form a
    nondegenerate, non-self-intersecting quadrilateral inside the raster.
    Every input is validated before the job changes. Each recognized word
-   becomes a text item, which carries its word box under the rule
-   extraction applies to native text (`LITEPARSE_FLAG_EMIT_WORD_BOXES` or
-   Markdown output). Errors become page
+   becomes a text item carrying its word box, as native text items always
+   do. Errors become page
    errors; with `LITEPARSE_FLAG_OCR_FAILURE_FATAL` the merge fails with
    `LITEPARSE_STATUS_OCR_ERROR` when every page in the round failed and one
    had sparse native text, and the job then accepts only

@@ -1163,8 +1163,7 @@ fn open_bytes_matches_open_path() {
 #[test]
 fn result_view_is_self_consistent() {
     let parser = Parser::new(|c| {
-        c.options |= LITEPARSE_FLAG_EMIT_WORD_BOXES
-            | LITEPARSE_FLAG_EXTRACT_TEXT_METADATA
+        c.options |= LITEPARSE_FLAG_EXTRACT_TEXT_METADATA
             | LITEPARSE_FLAG_INCLUDE_COMPLEXITY
             | LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS;
     });
@@ -1515,48 +1514,58 @@ fn staged_ocr_words_land_in_the_result() {
     );
 }
 
-/// A recognized word carries its own word box exactly when extraction gives
-/// native text one: under `LITEPARSE_FLAG_EMIT_WORD_BOXES` (or Markdown).
+/// Word boxes are not an option: under plain text output, with nothing
+/// requested, every native text item and every recognized word carries them.
 #[test]
-fn staged_ocr_items_carry_word_boxes_when_extraction_does() {
-    for with_boxes in [false, true] {
-        let parser = if with_boxes {
-            Parser::new(|c| c.options |= LITEPARSE_FLAG_EMIT_WORD_BOXES)
-        } else {
-            Parser::plain()
-        };
-        let document = parser.open("receipt.png");
-        let mut job = document.begin(&[]);
-        drop(document);
-        loop {
-            let view = job
-                .render(&[], LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE)
-                .unwrap();
-            if view.rasters_len == 0 {
-                break;
-            }
-            assert_eq!(
-                job.merge(&Recognition::words(&view, "zzocrzz")),
-                LITEPARSE_STATUS_OK
-            );
-        }
-        let result = job.finish().unwrap();
-        let view = result.view();
-        let items = arr(view.content.items, view.content.items_len);
-        let recognized = items
-            .iter()
-            .find(|item| pooled(view, item.text) == "zzocrzz")
-            .expect("the recognized word is a text item");
-        if with_boxes {
-            assert_eq!(recognized.word_count, 1);
-            let words = arr(view.content.words, view.content.words_len);
-            let word = &range(words, recognized.word_offset, recognized.word_count)[0];
-            assert_eq!(pooled(view, word.text), "zzocrzz");
+fn every_text_item_carries_word_boxes() {
+    let parser = Parser::new(|c| c.output_format = LITEPARSE_OUTPUT_FORMAT_TEXT);
+    let parsed = parser.open("sample.pdf").parse(&[]);
+    let view = parsed.view();
+    let items = arr(view.content.items, view.content.items_len);
+    let words = arr(view.content.words, view.content.words_len);
+    let native: Vec<_> = items
+        .iter()
+        .filter(|item| !pooled(view, item.text).trim().is_empty())
+        .collect();
+    assert!(!native.is_empty());
+    for item in native {
+        assert!(
+            item.word_count > 0,
+            "{:?} has no word box",
+            pooled(view, item.text)
+        );
+        for word in range(words, item.word_offset, item.word_count) {
             assert!(word.width > 0.0 && word.height > 0.0);
-        } else {
-            assert_eq!(recognized.word_count, 0);
         }
     }
+
+    let document = parser.open("receipt.png");
+    let mut job = document.begin(&[]);
+    drop(document);
+    loop {
+        let view = job
+            .render(&[], LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE)
+            .unwrap();
+        if view.rasters_len == 0 {
+            break;
+        }
+        assert_eq!(
+            job.merge(&Recognition::words(&view, "zzocrzz")),
+            LITEPARSE_STATUS_OK
+        );
+    }
+    let result = job.finish().unwrap();
+    let view = result.view();
+    let items = arr(view.content.items, view.content.items_len);
+    let recognized = items
+        .iter()
+        .find(|item| pooled(view, item.text) == "zzocrzz")
+        .expect("the recognized word is a text item");
+    assert_eq!(recognized.word_count, 1);
+    let words = arr(view.content.words, view.content.words_len);
+    let word = &range(words, recognized.word_offset, recognized.word_count)[0];
+    assert_eq!(pooled(view, word.text), "zzocrzz");
+    assert!(word.width > 0.0 && word.height > 0.0);
 }
 
 #[test]
@@ -1775,9 +1784,7 @@ fn complexity_view_covers_every_page() {
 
 #[test]
 fn extract_round_trips_into_parse_content() {
-    let parser = Parser::new(|c| {
-        c.options |= LITEPARSE_FLAG_EMIT_WORD_BOXES;
-    });
+    let parser = Parser::plain();
     let document = parser.open("page_labels.pdf");
     let extracted = document.extract(&[]);
     let view = extracted.view();

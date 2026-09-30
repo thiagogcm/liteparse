@@ -27,26 +27,25 @@ pub const LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX: u64 = 1u64 << 63;
 /// `LiteParseConfig.options` bits, whose presence denotes true.
 pub const LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR: u64 = 1u64 << 0;
 pub const LITEPARSE_FLAG_DETECT_SCREENSHOT_RECTS: u64 = 1u64 << 1;
-pub const LITEPARSE_FLAG_EMIT_WORD_BOXES: u64 = 1u64 << 2;
-pub const LITEPARSE_FLAG_EXTRACT_ANNOTATIONS: u64 = 1u64 << 3;
-pub const LITEPARSE_FLAG_EXTRACT_BLOCKS: u64 = 1u64 << 4;
-pub const LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS: u64 = 1u64 << 5;
-pub const LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA: u64 = 1u64 << 6;
-pub const LITEPARSE_FLAG_EXTRACT_FORM_FIELDS: u64 = 1u64 << 7;
-pub const LITEPARSE_FLAG_EXTRACT_IMAGES: u64 = 1u64 << 8;
-pub const LITEPARSE_FLAG_EXTRACT_LINKS: u64 = 1u64 << 9;
-pub const LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE: u64 = 1u64 << 10;
-pub const LITEPARSE_FLAG_EXTRACT_TEXT_METADATA: u64 = 1u64 << 11;
-pub const LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS: u64 = 1u64 << 12;
-pub const LITEPARSE_FLAG_EXTRACT_XFA_PACKETS: u64 = 1u64 << 13;
-pub const LITEPARSE_FLAG_INCLUDE_COMPLEXITY: u64 = 1u64 << 14;
-pub const LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS: u64 = 1u64 << 15;
-pub const LITEPARSE_FLAG_OCR_ENABLED: u64 = 1u64 << 16;
-pub const LITEPARSE_FLAG_OCR_FAILURE_FATAL: u64 = 1u64 << 17;
-pub const LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT: u64 = 1u64 << 18;
-pub const LITEPARSE_FLAG_RENDER_FORM_FIELDS: u64 = 1u64 << 19;
-pub const LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT: u64 = 1u64 << 20;
-pub const LITEPARSE_FLAG_EXTRACT_SCREENSHOTS: u64 = 1u64 << 21;
+pub const LITEPARSE_FLAG_EXTRACT_ANNOTATIONS: u64 = 1u64 << 2;
+pub const LITEPARSE_FLAG_EXTRACT_BLOCKS: u64 = 1u64 << 3;
+pub const LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS: u64 = 1u64 << 4;
+pub const LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA: u64 = 1u64 << 5;
+pub const LITEPARSE_FLAG_EXTRACT_FORM_FIELDS: u64 = 1u64 << 6;
+pub const LITEPARSE_FLAG_EXTRACT_IMAGES: u64 = 1u64 << 7;
+pub const LITEPARSE_FLAG_EXTRACT_LINKS: u64 = 1u64 << 8;
+pub const LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE: u64 = 1u64 << 9;
+pub const LITEPARSE_FLAG_EXTRACT_TEXT_METADATA: u64 = 1u64 << 10;
+pub const LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS: u64 = 1u64 << 11;
+pub const LITEPARSE_FLAG_EXTRACT_XFA_PACKETS: u64 = 1u64 << 12;
+pub const LITEPARSE_FLAG_INCLUDE_COMPLEXITY: u64 = 1u64 << 13;
+pub const LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS: u64 = 1u64 << 14;
+pub const LITEPARSE_FLAG_OCR_ENABLED: u64 = 1u64 << 15;
+pub const LITEPARSE_FLAG_OCR_FAILURE_FATAL: u64 = 1u64 << 16;
+pub const LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT: u64 = 1u64 << 17;
+pub const LITEPARSE_FLAG_RENDER_FORM_FIELDS: u64 = 1u64 << 18;
+pub const LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT: u64 = 1u64 << 19;
+pub const LITEPARSE_FLAG_EXTRACT_SCREENSHOTS: u64 = 1u64 << 20;
 
 // The destructure and mask assertion make omitted core booleans and flag gaps
 // compile-time failures.
@@ -79,6 +78,7 @@ macro_rules! config_flags {
             let CoreConfig {
                 $($field: _,)*
                 quiet: _,
+                emit_word_boxes: _,
                 ocr_language: _,
                 ocr_server_url: _,
                 ocr_server_headers: _,
@@ -102,7 +102,6 @@ macro_rules! config_flags {
 config_flags! {
     LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR => continue_on_page_error,
     LITEPARSE_FLAG_DETECT_SCREENSHOT_RECTS => detect_screenshot_rects,
-    LITEPARSE_FLAG_EMIT_WORD_BOXES => emit_word_boxes,
     LITEPARSE_FLAG_EXTRACT_ANNOTATIONS => extract_annotations,
     LITEPARSE_FLAG_EXTRACT_BLOCKS => extract_blocks,
     LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS => extract_content_bounds,
@@ -252,6 +251,8 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
     apply_flags(raw.options, &mut config);
     // The library writes no progress output.
     config.quiet = true;
+    // Every text item carries its word boxes, native or recognized, under every output format.
+    config.emit_word_boxes = true;
 
     config.max_pages = raw.max_pages as usize;
     config.num_workers = raw.num_workers as usize;
