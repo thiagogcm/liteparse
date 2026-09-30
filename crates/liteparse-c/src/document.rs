@@ -15,6 +15,7 @@ use crate::handle::{
     view_of, view_state,
 };
 use crate::job::Job;
+use crate::outline::outline;
 use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, OcrEngineChoice, ParserState, build_parser};
 use crate::raw_text::{LiteParseRawText, extract_raw_text};
@@ -110,7 +111,8 @@ pub(crate) struct Source {
 
 impl Source {
     /// Convert `input` to PDF once and read the facts every operation
-    /// reuses: page count, outline, and descriptive metadata.
+    /// reuses: page count, [outline](crate::outline), and descriptive
+    /// metadata.
     pub(crate) fn prepare(
         config: CoreConfig,
         glyph_resolver: Option<Arc<dyn GlyphResolver>>,
@@ -126,7 +128,7 @@ impl Source {
                 stages::open(&lib, &input, password, &config.page_orientation_corrections)?;
             (
                 document.page_count().max(0) as u32,
-                stages::outline(&document),
+                outline(&lib, &input, password)?,
                 want_metadata.then(|| DescriptiveInfo::read(&document)),
                 want_metadata.then(|| stages::document_metadata(&input, &document)),
             )
