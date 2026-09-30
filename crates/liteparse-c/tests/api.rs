@@ -1499,6 +1499,50 @@ fn staged_ocr_words_land_in_the_result() {
     );
 }
 
+/// A recognized word carries its own word box exactly when extraction gives
+/// native text one: under `LITEPARSE_FLAG_EMIT_WORD_BOXES` (or Markdown).
+#[test]
+fn staged_ocr_items_carry_word_boxes_when_extraction_does() {
+    for with_boxes in [false, true] {
+        let parser = if with_boxes {
+            Parser::new(|c| c.options |= LITEPARSE_FLAG_EMIT_WORD_BOXES)
+        } else {
+            Parser::plain()
+        };
+        let document = parser.open("receipt.png");
+        let mut job = document.begin(&[]);
+        drop(document);
+        loop {
+            let view = job
+                .render(&[], LITEPARSE_OCR_PIXEL_FORMAT_GRAYSCALE)
+                .unwrap();
+            if view.rasters_len == 0 {
+                break;
+            }
+            assert_eq!(
+                job.merge(&Recognition::words(&view, "zzocrzz")),
+                LITEPARSE_STATUS_OK
+            );
+        }
+        let result = job.finish().unwrap();
+        let view = result.view();
+        let items = arr(view.content.items, view.content.items_len);
+        let recognized = items
+            .iter()
+            .find(|item| pooled(view, item.text) == "zzocrzz")
+            .expect("the recognized word is a text item");
+        if with_boxes {
+            assert_eq!(recognized.word_count, 1);
+            let words = arr(view.content.words, view.content.words_len);
+            let word = &range(words, recognized.word_offset, recognized.word_count)[0];
+            assert_eq!(pooled(view, word.text), "zzocrzz");
+            assert!(word.width > 0.0 && word.height > 0.0);
+        } else {
+            assert_eq!(recognized.word_count, 0);
+        }
+    }
+}
+
 #[test]
 fn staged_ocr_validates_every_input_before_merging() {
     let parser = Parser::plain();
