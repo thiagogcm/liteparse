@@ -3365,6 +3365,66 @@ fn nested_form_object_budget_rejects_the_thirty_third_form() {
 }
 
 #[test]
+fn clip_read_limit_includes_the_exact_boundary_and_the_entire_stack() {
+    let parser = Parser::plain();
+    for counts in [&[1023][..], &[1024], &[1025], &[512, 512], &[512, 513]] {
+        let mut content = String::from("q ");
+        for (index, count) in counts.iter().enumerate() {
+            // PDFium adds the final closing line to the initial MoveTo point.
+            // Nonrectangular polygons prevent rectangular-clip simplification.
+            content.push_str(&format!("0 {index} m "));
+            for point in 1..count - 1 {
+                content.push_str(&format!("{point} {} l ", index + point % 2));
+            }
+            content.push_str("h W* n ");
+        }
+        content.push_str("BT /F1 10 Tf 10 20 Td (KEEP) Tj ET Q");
+        let document = parser.open_bytes(&clipping_pdf(&content, &[], 0));
+        let snapshot = document.page_objects(0).unwrap();
+        let v = snapshot.view();
+        let objects = arr(v.objects, v.objects_len);
+        assert_eq!(objects.len(), 1);
+        let total: usize = counts.iter().sum();
+        let available = total <= 1024;
+        assert_eq!(
+            objects[0].flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS != 0,
+            available,
+            "clip stack {counts:?}"
+        );
+        if available {
+            let paths = range(
+                arr(v.clip_paths, v.clip_paths_len),
+                objects[0].clip_path_offset,
+                objects[0].clip_path_count,
+            );
+            assert_eq!(paths.len(), counts.len());
+            assert_eq!(
+                paths
+                    .iter()
+                    .map(|p| p.segment_count as usize)
+                    .collect::<Vec<_>>(),
+                counts
+            );
+            assert_eq!(v.segments_len, total);
+            for path in paths {
+                range(
+                    arr(v.segments, v.segments_len),
+                    path.segment_offset,
+                    path.segment_count,
+                );
+            }
+        } else {
+            assert_eq!(objects[0].clip_path_count, 0);
+            assert!(v.clip_paths.is_null() && v.clip_paths_len == 0);
+            assert!(
+                v.segments.is_null() && v.segments_len == 0,
+                "an unavailable stack must not publish a partial prefix"
+            );
+        }
+    }
+}
+
+#[test]
 fn page_objects_image_payloads_follow_flags() {
     let parser = Parser::plain();
     let document = parser.open_bytes(&objects_pdf());
