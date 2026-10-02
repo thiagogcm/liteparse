@@ -477,7 +477,8 @@
 
 /**
  * Clip paths were read successfully, including an empty stack (no path clip).
- * Unavailable APIs, failed reads, or PDFium's clip-size limit leave this clear.
+ * Unavailable APIs, failed reads, or LiteParse's 1,024-segment clip-read limit
+ * leave this clear.
  */
 #define LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS (1 << 12)
 
