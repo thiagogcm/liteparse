@@ -335,6 +335,10 @@ static int stage_page_objects(LiteParseDocument *document) {
   }
   const LiteParsePageObjectsView *v = liteparse_page_objects_view(objects);
   int bad = v == NULL || v->pages_len == 0;
+  if (!bad) {
+    bad |= check_array(v->clip_paths, v->clip_paths_len, "clip paths");
+    bad |= check_array(v->segments, v->segments_len, "segments");
+  }
   for (size_t i = 0; !bad && i < v->filters_len; i++) {
     bad |= check_str(v->arenas.pool, v->arenas.pool_len, v->filters[i], "filter name");
   }
@@ -347,8 +351,16 @@ static int stage_page_objects(LiteParseDocument *document) {
                        "children");
     bad |= check_range(v->objects[i].segment_offset, v->objects[i].segment_count,
                        v->segments_len, "segments");
+    bad |= check_range(v->objects[i].clip_path_offset, v->objects[i].clip_path_count,
+                       v->clip_paths_len, "object clip paths");
+    if (!(v->objects[i].flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS) &&
+        v->objects[i].clip_path_count != 0) bad = fail("unavailable clip paths");
     bad |= check_range(v->objects[i].filter_offset, v->objects[i].filter_count, v->filters_len,
                        "filters");
+  }
+  for (size_t i = 0; !bad && i < v->clip_paths_len; i++) {
+    bad |= check_range(v->clip_paths[i].segment_offset, v->clip_paths[i].segment_count,
+                       v->segments_len, "clip segments");
   }
   liteparse_page_objects_free(objects);
   return bad;
@@ -562,6 +574,9 @@ int main(int argc, char **argv) {
     return fail("ABI descriptor");
   }
   if (liteparse_sizeof(LITEPARSE_TYPE_CONFIG) != sizeof(LiteParseConfig) ||
+      liteparse_sizeof(LITEPARSE_TYPE_CLIP_PATH) != sizeof(LiteParseClipPath) ||
+      liteparse_sizeof(LITEPARSE_TYPE_PAGE_OBJECT) != sizeof(LiteParsePageObject) ||
+      liteparse_sizeof(LITEPARSE_TYPE_PAGE_OBJECTS_VIEW) != sizeof(LiteParsePageObjectsView) ||
       liteparse_sizeof(LITEPARSE_TYPE_TEXT_ITEM) != sizeof(LiteParseTextItem) ||
       liteparse_sizeof(LITEPARSE_TYPE_RESULT_VIEW) != sizeof(LiteParseResultView) ||
       liteparse_sizeof(LITEPARSE_TYPE_STR) != sizeof(LiteParseStr) || liteparse_sizeof(9999) != 0) {

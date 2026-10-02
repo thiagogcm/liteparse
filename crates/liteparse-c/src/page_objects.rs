@@ -1,5 +1,5 @@
 use liteparse_pdfium::{
-    BitmapFormat, Color, Library, Page, PageObject, PageObjectKind, SegmentKind,
+    BitmapFormat, Color, Library, Page, PageObject, PageObjectKind, RawPathSegment, SegmentKind,
 };
 
 use crate::budget::{bytes_of, check_result_bytes};
@@ -36,6 +36,9 @@ pub const LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_RAW_UNAVAILABLE: u32 = 1 << 9;
 pub const LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_DECODED_UNAVAILABLE: u32 = 1 << 10;
 /// PDFium did not return a requested image bitmap.
 pub const LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_BITMAP_UNAVAILABLE: u32 = 1 << 11;
+/// Clip paths were read successfully, including an empty stack (no path clip).
+/// Unavailable APIs, failed reads, or PDFium's clip-size limit leave this clear.
+pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS: u32 = 1 << 12;
 
 /// `LiteParsePathSegment.kind` values.
 pub const LITEPARSE_PATH_SEGMENT_UNKNOWN: u32 = 0;
@@ -125,7 +128,8 @@ pub struct LiteParsePageObjectPage {
     pub object_count: u32,
 }
 
-/// One path segment in the object's own coordinate space.
+/// One path segment. Object paths use the object's own coordinates; clip
+/// paths use y-up containing-form coordinates (page coordinates at top level).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiteParsePathSegment {
@@ -137,8 +141,19 @@ pub struct LiteParsePathSegment {
     pub y: f32,
 }
 
+/// One path in an object's clip stack. Its range indexes the view's `segments`.
+/// Points already include the object's matrix, but not ancestor form matrices.
+/// Paths are reported as-is, including curves and compound paths, not as bounds.
+/// PDFium does not expose text-based clipping or the clip's fill rule.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiteParseClipPath {
+    pub segment_offset: u32,
+    pub segment_count: u32,
+}
+
 /// One content object. Ranges index the view's `objects` (direct Form
-/// XObject children), `segments`, and `filters` arrays. Image payloads are
+/// XObject children), `segments`, `clip_paths`, and `filters` arrays. Image payloads are
 /// empty when not requested, empty, or unavailable; the `*_UNAVAILABLE`
 /// flags mark requested payloads PDFium did not return.
 #[repr(C)]
@@ -157,6 +172,8 @@ pub struct LiteParsePageObject {
     pub child_count: u32,
     pub segment_offset: u32,
     pub segment_count: u32,
+    pub clip_path_offset: u32,
+    pub clip_path_count: u32,
     pub filter_offset: u32,
     pub filter_count: u32,
     pub stroke_width: f32,
@@ -189,6 +206,8 @@ pub struct LiteParsePageObjectsView {
     pub objects_len: usize,
     pub segments: *const LiteParsePathSegment,
     pub segments_len: usize,
+    pub clip_paths: *const LiteParseClipPath,
+    pub clip_paths_len: usize,
     pub filters: *const LiteParseStr,
     pub filters_len: usize,
 }
@@ -200,6 +219,7 @@ struct Packer {
     pages: Vec<LiteParsePageObjectPage>,
     objects: Vec<LiteParsePageObject>,
     segments: Vec<LiteParsePathSegment>,
+    clip_paths: Vec<LiteParseClipPath>,
     filters: Vec<LiteParseStr>,
 }
 
@@ -210,6 +230,7 @@ struct Mark {
     blobs: usize,
     objects: usize,
     segments: usize,
+    clip_paths: usize,
     filters: usize,
 }
 
@@ -228,6 +249,7 @@ impl Packer {
             + bytes_of(&self.pages)
             + bytes_of(&self.objects)
             + bytes_of(&self.segments)
+            + bytes_of(&self.clip_paths)
             + bytes_of(&self.filters)
     }
 
@@ -238,6 +260,7 @@ impl Packer {
             blobs: self.arenas.blobs.len(),
             objects: self.objects.len(),
             segments: self.segments.len(),
+            clip_paths: self.clip_paths.len(),
             filters: self.filters.len(),
         }
     }
@@ -248,6 +271,7 @@ impl Packer {
         self.arenas.blobs.truncate(mark.blobs);
         self.objects.truncate(mark.objects);
         self.segments.truncate(mark.segments);
+        self.clip_paths.truncate(mark.clip_paths);
         self.filters.truncate(mark.filters);
     }
 
@@ -331,28 +355,23 @@ impl Packer {
         self.segments.extend(
             (0..object.path_segment_count().unwrap_or(0))
                 .filter_map(|index| object.path_segment(index))
-                .map(|segment| {
-                    let kind = match segment.kind {
-                        Some(SegmentKind::MoveTo) => LITEPARSE_PATH_SEGMENT_MOVETO,
-                        Some(SegmentKind::LineTo) => LITEPARSE_PATH_SEGMENT_LINETO,
-                        Some(SegmentKind::BezierTo) => LITEPARSE_PATH_SEGMENT_BEZIERTO,
-                        None => LITEPARSE_PATH_SEGMENT_UNKNOWN,
-                    };
-                    let (x, y) = segment.point.unwrap_or_default();
-                    LiteParsePathSegment {
-                        kind,
-                        flags: flag_bits(&[
-                            (segment.close, LITEPARSE_PATH_SEGMENT_FLAG_CLOSE),
-                            (
-                                segment.point.is_some(),
-                                LITEPARSE_PATH_SEGMENT_FLAG_HAS_POINT,
-                            ),
-                        ]),
-                        x,
-                        y,
-                    }
-                }),
+                .map(path_segment),
         );
+        let segment_count = self.segments.len() - segment_offset;
+        let clip_path_offset = self.clip_paths.len();
+        let clips = object.clip_paths();
+        if let Some(paths) = &clips {
+            for path in paths {
+                let segment_offset = self.segments.len();
+                self.segments.extend(path.iter().copied().map(path_segment));
+                self.clip_paths.push(LiteParseClipPath {
+                    segment_offset: packed_len(segment_offset),
+                    segment_count: packed_len(path.len()),
+                });
+            }
+        }
+        // Clip records and segments count against the same result budget.
+        check_result_bytes(self.bytes())?;
         let metadata = object.image_metadata();
         let filter_offset = self.filters.len();
         for index in 0..object.image_filter_count().unwrap_or(0) {
@@ -387,6 +406,7 @@ impl Packer {
             flags: flag_bits(&[
                 (matrix.is_some(), LITEPARSE_PAGE_OBJECT_FLAG_HAS_MATRIX),
                 (bounds.is_some(), LITEPARSE_PAGE_OBJECT_FLAG_HAS_BOUNDS),
+                (clips.is_some(), LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS),
                 (
                     draw_mode.is_some(),
                     LITEPARSE_PAGE_OBJECT_FLAG_HAS_DRAW_MODE,
@@ -429,7 +449,9 @@ impl Packer {
                 ),
             ]),
             segment_offset: packed_len(segment_offset),
-            segment_count: packed_len(self.segments.len() - segment_offset),
+            segment_count: packed_len(segment_count),
+            clip_path_offset: packed_len(clip_path_offset),
+            clip_path_count: packed_len(self.clip_paths.len() - clip_path_offset),
             filter_offset: packed_len(filter_offset),
             filter_count: packed_len(self.filters.len() - filter_offset),
             stroke_width: stroke_width.unwrap_or(0.0),
@@ -465,10 +487,34 @@ impl Packer {
             objects_len: self.objects.len(),
             segments: array_ptr(&self.segments),
             segments_len: self.segments.len(),
+            clip_paths: array_ptr(&self.clip_paths),
+            clip_paths_len: self.clip_paths.len(),
             filters: array_ptr(&self.filters),
             filters_len: self.filters.len(),
         };
         Ok(PageObjectsState { packer: self, view })
+    }
+}
+
+fn path_segment(segment: RawPathSegment) -> LiteParsePathSegment {
+    let kind = match segment.kind {
+        Some(SegmentKind::MoveTo) => LITEPARSE_PATH_SEGMENT_MOVETO,
+        Some(SegmentKind::LineTo) => LITEPARSE_PATH_SEGMENT_LINETO,
+        Some(SegmentKind::BezierTo) => LITEPARSE_PATH_SEGMENT_BEZIERTO,
+        None => LITEPARSE_PATH_SEGMENT_UNKNOWN,
+    };
+    let (x, y) = segment.point.unwrap_or_default();
+    LiteParsePathSegment {
+        kind,
+        flags: flag_bits(&[
+            (segment.close, LITEPARSE_PATH_SEGMENT_FLAG_CLOSE),
+            (
+                segment.point.is_some(),
+                LITEPARSE_PATH_SEGMENT_FLAG_HAS_POINT,
+            ),
+        ]),
+        x,
+        y,
     }
 }
 
@@ -619,6 +665,7 @@ mod budget_tests {
             packer.pages.push(LiteParsePageObjectPage::default());
             packer.objects.push(LiteParsePageObject::default());
             packer.segments.push(LiteParsePathSegment::default());
+            packer.clip_paths.push(LiteParseClipPath::default());
             let name = packer.arenas.pool.push("DCTDecode");
             packer.filters.push(name);
             packer.arenas.push_blob(&[1, 2, 3], 0).unwrap();
@@ -629,6 +676,7 @@ mod budget_tests {
                 packer.pages.len(),
                 packer.objects.len(),
                 packer.segments.len(),
+                packer.clip_paths.len(),
                 packer.filters.len(),
                 packer.arenas.pool.len(),
                 packer.arenas.blobs.len(),
@@ -661,6 +709,21 @@ mod budget_tests {
                 .unwrap_err()
                 .status,
             LITEPARSE_STATUS_RESOURCE_LIMIT
+        );
+    }
+
+    #[test]
+    fn clip_paths_and_their_segments_count_against_the_result_budget() {
+        let mut packer = Packer::default();
+        let before = packer.bytes();
+        packer.clip_paths.push(LiteParseClipPath {
+            segment_offset: 0,
+            segment_count: 4,
+        });
+        packer.segments.resize(4, LiteParsePathSegment::default());
+        assert_eq!(
+            packer.bytes() - before,
+            (size_of::<LiteParseClipPath>() + 4 * size_of::<LiteParsePathSegment>()) as u64
         );
     }
 }

@@ -15,8 +15,8 @@ use crate::job::LiteParseOcrRasterView;
 use crate::ocr::{LiteParseOcrPageInput, LiteParseOcrRaster, LiteParseOcrWord};
 use crate::page_objects::{LITEPARSE_MAX_OBJECT_NESTING_DEPTH, LITEPARSE_MAX_OBJECTS};
 use crate::page_objects::{
-    LiteParseMatrix, LiteParsePageObject, LiteParsePageObjectPage, LiteParsePageObjectsView,
-    LiteParsePathSegment, LiteParsePdfBounds,
+    LiteParseClipPath, LiteParseMatrix, LiteParsePageObject, LiteParsePageObjectPage,
+    LiteParsePageObjectsView, LiteParsePathSegment, LiteParsePdfBounds,
 };
 use crate::raw_text::{LiteParseRawTextItem, LiteParseRawTextPage, LiteParseRawTextView};
 use crate::records::*;
@@ -226,6 +226,8 @@ pub const LITEPARSE_TYPE_ABI_DESCRIPTOR: u32 = 54;
 pub const LITEPARSE_TYPE_OCR_PAGE_INPUT: u32 = 55;
 /// `liteparse_sizeof` selector for `LiteParseOcrRasterView`.
 pub const LITEPARSE_TYPE_OCR_RASTER_VIEW: u32 = 56;
+/// `liteparse_sizeof` selector for `LiteParseClipPath`.
+pub const LITEPARSE_TYPE_CLIP_PATH: u32 = 57;
 
 /// `sizeof` the struct a `LITEPARSE_TYPE_*` selector names, or zero for an
 /// unknown selector. Lets a binding that declares layouts by hand assert
@@ -288,6 +290,7 @@ pub extern "C" fn liteparse_sizeof(type_id: u32) -> usize {
         LITEPARSE_TYPE_PDF_BOUNDS => size_of::<LiteParsePdfBounds>(),
         LITEPARSE_TYPE_PAGE_OBJECT => size_of::<LiteParsePageObject>(),
         LITEPARSE_TYPE_PATH_SEGMENT => size_of::<LiteParsePathSegment>(),
+        LITEPARSE_TYPE_CLIP_PATH => size_of::<LiteParseClipPath>(),
         LITEPARSE_TYPE_PAGE_OBJECTS_VIEW => size_of::<LiteParsePageObjectsView>(),
         LITEPARSE_TYPE_RAW_TEXT_PAGE => size_of::<LiteParseRawTextPage>(),
         LITEPARSE_TYPE_RAW_TEXT_ITEM => size_of::<LiteParseRawTextItem>(),
@@ -347,6 +350,7 @@ const ABI_TYPE_IDS: &[u32] = &[
     LITEPARSE_TYPE_PDF_BOUNDS,
     LITEPARSE_TYPE_PAGE_OBJECT,
     LITEPARSE_TYPE_PATH_SEGMENT,
+    LITEPARSE_TYPE_CLIP_PATH,
     LITEPARSE_TYPE_PAGE_OBJECTS_VIEW,
     LITEPARSE_TYPE_RAW_TEXT_PAGE,
     LITEPARSE_TYPE_RAW_TEXT_ITEM,
