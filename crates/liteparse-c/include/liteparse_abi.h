@@ -3,6 +3,6 @@
 #define LITEPARSE_ABI_H
 
 /* Expected LiteParseAbiDescriptor.layout_fingerprint for liteparse.h. */
-#define LITEPARSE_ABI_FINGERPRINT 0xf36411d124f677c7ULL
+#define LITEPARSE_ABI_FINGERPRINT 0x6057fcf7aa68029bULL
 
 #endif

@@ -37,7 +37,8 @@ pub const LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_DECODED_UNAVAILABLE: u32 = 1 << 10;
 /// PDFium did not return a requested image bitmap.
 pub const LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_BITMAP_UNAVAILABLE: u32 = 1 << 11;
 /// Clip paths were read successfully, including an empty stack (no path clip).
-/// Unavailable APIs, failed reads, or PDFium's clip-size limit leave this clear.
+/// Unavailable APIs, failed reads, or LiteParse's 1,024-segment clip-read limit
+/// leave this clear.
 pub const LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS: u32 = 1 << 12;
 
 /// `LiteParsePathSegment.kind` values.
