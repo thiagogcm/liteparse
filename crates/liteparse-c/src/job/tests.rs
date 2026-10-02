@@ -145,3 +145,55 @@ fn complexity_matches_core_is_complex() {
         );
     }
 }
+
+#[test]
+fn unmapped_text_is_garbled_in_complexity_and_native_ocr_predicates() {
+    use crate::records::{LITEPARSE_COMPLEXITY_FLAG_IS_GARBLED, LiteParsePageComplexity};
+    use liteparse::types::TextItem;
+
+    let source = source(everything_config(), &fixture("sample.pdf"), false);
+    let mut job = Job::begin(source.clone(), source.core(), Some(&[1])).unwrap();
+    let healthy = TextItem {
+        text: "A healthy paragraph with enough readable words to avoid sparse native text. "
+            .repeat(4),
+        font_name: Some("Helvetica".into()),
+        ..Default::default()
+    };
+    let unmapped = |count| TextItem {
+        text: "\u{E001}".repeat(count),
+        has_unicode_map_error: true,
+        font_name: Some("Type3".into()),
+        ..Default::default()
+    };
+    let lib = Library::try_init().unwrap();
+    let document = source.open(&lib, &source.input).unwrap();
+    for (items, garbled) in [
+        (vec![unmapped(32)], true),
+        (vec![healthy.clone(), unmapped(60)], true),
+        (vec![healthy.clone(), unmapped(1)], false),
+        (vec![healthy, unmapped(32)], false), // substantial count, insignificant share
+    ] {
+        job.pages[0].text_items = items;
+        let stats = page_complexity(&document, &job.pages[0], false, &mut Vec::new())
+            .unwrap()
+            .unwrap();
+        let packed = LiteParsePageComplexity::from(&stats);
+        assert_eq!(
+            packed.flags & LITEPARSE_COMPLEXITY_FLAG_IS_GARBLED != 0,
+            garbled
+        );
+        let round = stages::render_for_ocr(
+            &document,
+            &job.pages,
+            0,
+            &OcrRenderOptions {
+                selection: Some(HashSet::from([1])),
+                ..job.ocr_options.clone()
+            },
+        )
+        .unwrap()
+        .0;
+        assert_eq!(round.len(), 1);
+        assert_eq!(round[0].has_native_text, !garbled);
+    }
+}

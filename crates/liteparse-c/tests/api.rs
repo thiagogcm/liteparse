@@ -192,6 +192,23 @@ fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Courier text and optional nested Form XObjects, numbered from 6 onward.
+fn clipping_pdf(content: &str, forms: &[Vec<u8>], rotation: i32) -> Vec<u8> {
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {rotation} \
+             /Resources << /Font << /F1 4 0 R >> /XObject << /Outer 6 0 R >> >> /Contents 5 0 R >>"
+        )
+        .into_bytes(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_vec(),
+        stream("", content.as_bytes()),
+    ];
+    objects.extend_from_slice(forms);
+    assemble(&objects)
+}
+
 /// One page: a translated filled rect, a Form XObject with a stroked rect, and a 2×2 grey image.
 fn objects_pdf() -> Vec<u8> {
     let content =
@@ -1765,6 +1782,189 @@ fn raw_text_keeps_every_glyph_and_forwards_page_labels() {
     unsafe { liteparse_raw_text_free(handle) };
 }
 
+fn assert_clipped_text(bytes: &[u8], expected: &str) {
+    let parser = Parser::plain();
+    let document = parser.open_bytes(bytes);
+    let compact = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    // Projection can reorder runs into reading order, independent of clipping.
+    let characters = |text: &str| {
+        let mut chars: Vec<_> = compact(text).chars().collect();
+        chars.sort_unstable();
+        chars
+    };
+    let extracted = document.extract(&[]);
+    let parsed = document.parse(&[]);
+    let reprojected = parser.parse_content(&extracted.view().content).unwrap();
+    let mut job = call(
+        |out| unsafe { liteparse_document_begin(document.0, ptr::null(), 0, out) },
+        Job,
+    )
+    .unwrap();
+    let staged = call(|out| unsafe { liteparse_job_finish(&mut job.0, out) }, Res).unwrap();
+    assert!(job.0.is_null());
+    for result in [&extracted, &parsed, &reprojected, &staged] {
+        let v = result.view();
+        let text: String = arr(v.content.items, v.content.items_len)
+            .iter()
+            .map(|item| pooled(v, item.text))
+            .collect();
+        assert_eq!(characters(&text), characters(expected));
+        check_result_ranges(v);
+    }
+    assert_eq!(parsed.text(), reprojected.text());
+    assert_eq!(parsed.text(), staged.text());
+    let mut raw = ptr::null_mut();
+    assert_eq!(
+        unsafe { liteparse_document_raw_text(document.0, ptr::null(), 0, &mut raw) },
+        LITEPARSE_STATUS_OK
+    );
+    let v = unsafe { liteparse_raw_text_view(raw).as_ref() }.unwrap();
+    let text: String = arr(v.items, v.items_len)
+        .iter()
+        .map(|item| pooled(v, item.text))
+        .collect();
+    assert_eq!(compact(&text), compact(expected));
+    unsafe { liteparse_raw_text_free(raw) };
+}
+
+#[test]
+fn clipping_filters_every_text_pipeline_and_preserves_partial_glyphs() {
+    for rotation in [0, 90, 180, 270] {
+        for (edge, expected) in [(26, "ABC"), (24, "ABC"), (22, "ABC"), (21, "AB")] {
+            let content = format!(
+                "q 10 10 {} 30 re W n BT /F1 10 Tf 10 20 Td (ABCDE) Tj ET Q",
+                edge - 10
+            );
+            assert_clipped_text(&clipping_pdf(&content, &[], rotation), expected);
+        }
+    }
+    for (content, expected) in [
+        (
+            "q 100 200 70 8 re W* n BT /F1 6 Tf 105 201 Td (VISIBLE) Tj 0 -7 Td (42) Tj ET Q BT /F1 6 Tf 105 194 Td (NEXT) Tj ET",
+            "VISIBLE NEXT",
+        ),
+        (
+            "q 0 0 100 100 re W n 10 10 14 30 re W* n BT /F1 10 Tf 10 20 Td (ABCDE) Tj ET Q BT /F1 10 Tf 100 100 Td (RESTORED) Tj ET",
+            "ABC RESTORED",
+        ),
+        (
+            "q 2 0 0 2 100 100 cm 0 0 14 40 re W n BT /F1 10 Tf 0 20 Td (ABCDE) Tj ET Q",
+            "ABC",
+        ),
+        (
+            "q 0 0 5 5 re W n 10 10 5 5 re W n BT /F1 10 Tf 10 20 Td (HIDDEN) Tj ET Q",
+            "",
+        ),
+    ] {
+        assert_clipped_text(&clipping_pdf(content, &[], 0), expected);
+    }
+}
+
+#[test]
+fn nested_form_clips_compose_only_ancestor_matrices() {
+    let forms = [
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /XObject << /Inner 7 0 R >> >>",
+            b"2 0 0 2 10 15 cm /Inner Do",
+        ),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 4 0 R >> >>",
+            b"0 0 25 80 re W n BT /F1 10 Tf 5 20 Td (ABCDE) Tj ET",
+        ),
+    ];
+    assert_clipped_text(
+        &clipping_pdf(
+            "q 100 100 35 300 re W n 1 0 0 1 100 100 cm /Outer Do Q",
+            &forms,
+            0,
+        ),
+        "AB",
+    );
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 17 100] /Resources << /Font << /F1 4 0 R >> >>",
+        b"BT /F1 10 Tf 0 20 Td (ABCDE) Tj ET",
+    );
+    assert_clipped_text(
+        &clipping_pdf("1 0 0 1 100 100 cm /Outer Do", &[form], 0),
+        "ABC",
+    );
+}
+
+#[test]
+fn partially_clipped_glyphs_keep_full_raw_geometry_and_char_codes() {
+    let parser = Parser::plain();
+    let snapshot = |content: &str| {
+        let document = parser.open_bytes(&clipping_pdf(content, &[], 0));
+        let mut raw = ptr::null_mut();
+        assert_eq!(
+            unsafe { liteparse_document_raw_text(document.0, ptr::null(), 0, &mut raw) },
+            LITEPARSE_STATUS_OK
+        );
+        let v = unsafe { liteparse_raw_text_view(raw).as_ref() }.unwrap();
+        let items = arr(v.items, v.items_len);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        let geometry = [
+            item.x,
+            item.y,
+            item.width,
+            item.height,
+            item.angle_radians,
+            item.grounding_bounds.x,
+            item.grounding_bounds.y,
+            item.grounding_bounds.width,
+            item.grounding_bounds.height,
+        ];
+        let codes = range(
+            arr(v.char_codes, v.char_codes_len),
+            item.char_code_offset,
+            item.char_code_count,
+        )
+        .to_vec();
+        let result = (pooled(v, item.text), geometry, codes, item.flags);
+        unsafe { liteparse_raw_text_free(raw) };
+        result
+    };
+    let text = "BT /F1 10 Tf 10 20 Td (A) Tj ET";
+    let original = snapshot(text);
+    assert_eq!(original.0, "A");
+    let [left, y, width, height, ..] = original.1;
+    let right = left + width;
+    let top = 800.0 - y;
+    let bottom = top - height;
+    for (x, y, w, h) in [
+        (left - 1.0, bottom - 1.0, 1.1, height + 2.0),
+        (right - 0.1, bottom - 1.0, 1.1, height + 2.0),
+        (left - 1.0, bottom - 1.0, width + 2.0, 1.1),
+        (left - 1.0, top - 0.1, width + 2.0, 1.1),
+    ] {
+        assert_eq!(
+            snapshot(&format!("q {x} {y} {w} {h} re W n {text} Q")),
+            original
+        );
+    }
+}
+
+#[test]
+fn unsupported_clips_and_invisible_ocr_layers_preserve_source_text() {
+    for path in [
+        "0 0 m 1 0 l 1 1 l h",
+        "0 0 1 1 re 2 2 1 1 re",
+        "0 0 m 1 0 1 1 0 1 c h",
+    ] {
+        let content = format!("q {path} W* n BT /F1 10 Tf 10 20 Td (KEEP) Tj ET Q");
+        assert_clipped_text(&clipping_pdf(&content, &[], 0), "KEEP");
+    }
+    assert_clipped_text(
+        &clipping_pdf("BT /F1 10 Tf 3 Tr 10 20 Td (OCR) Tj ET", &[], 0),
+        "OCR",
+    );
+}
+
 #[test]
 fn complexity_view_covers_every_page() {
     let parser = Parser::plain();
@@ -3002,6 +3202,150 @@ fn page_object_budget_fails_atomically_even_in_tolerant_mode() {
     );
     assert!(out.is_null());
     last_error_contains("count exceeds the operation limit");
+}
+
+#[test]
+fn page_object_clip_paths_keep_coordinates_and_separate_segment_ranges() {
+    let parser = Parser::plain();
+    let document = parser.open_bytes(&clipping_pdf(
+        "q 2 0 0 2 100 100 cm 0 0 14 40 re W n 0 0 5 5 re S BT /F1 10 Tf 0 20 Td (ABCDE) Tj ET Q BT /F1 10 Tf 200 200 Td (PLAIN) Tj ET",
+        &[], 0,
+    ));
+    let snapshot = document.page_objects(0).unwrap();
+    let v = snapshot.view();
+    let objects = arr(v.objects, v.objects_len).to_vec();
+    let clips = arr(v.clip_paths, v.clip_paths_len).to_vec();
+    let segments = arr(v.segments, v.segments_len).to_vec();
+    assert_eq!(
+        objects.len(),
+        3,
+        "hidden source glyphs do not filter the object snapshot"
+    );
+    assert_eq!(clips.len(), 2);
+    assert_ne!(
+        objects[2].flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS,
+        0
+    );
+    assert_eq!(objects[2].clip_path_count, 0, "available, but unclipped");
+    // Pointer-free clip records and shared segments survive handle destruction.
+    drop(snapshot);
+    for object in &objects[..2] {
+        assert_ne!(object.flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS, 0);
+        let paths = range(&clips, object.clip_path_offset, object.clip_path_count);
+        assert_eq!(paths.len(), 1);
+        let points = range(&segments, paths[0].segment_offset, paths[0].segment_count);
+        assert_eq!((points[0].x, points[0].y), (100.0, 100.0));
+        assert_eq!(
+            points.iter().map(|s| s.x).fold(f32::NEG_INFINITY, f32::max),
+            128.0
+        );
+        assert_eq!(
+            points.iter().map(|s| s.y).fold(f32::NEG_INFINITY, f32::max),
+            180.0
+        );
+        assert_eq!(points[0].kind, LITEPARSE_PATH_SEGMENT_MOVETO);
+        assert_ne!(
+            points.last().unwrap().flags & LITEPARSE_PATH_SEGMENT_FLAG_CLOSE,
+            0
+        );
+    }
+    let own = range(
+        &segments,
+        objects[0].segment_offset,
+        objects[0].segment_count,
+    );
+    assert_eq!(
+        (own[0].x, own[0].y),
+        (0.0, 0.0),
+        "object paths retain local coordinates"
+    );
+    assert!(own.iter().all(|s| s.x <= 5.0 && s.y <= 5.0));
+    assert_eq!(
+        objects[1].segment_count, 0,
+        "text has no object-path segments"
+    );
+    assert_eq!(size_of::<LiteParseClipPath>(), 8);
+    assert_eq!(
+        liteparse_sizeof(LITEPARSE_TYPE_CLIP_PATH),
+        size_of::<LiteParseClipPath>()
+    );
+}
+
+#[test]
+fn page_object_clip_paths_retain_curves_compound_paths_and_form_space() {
+    let parser = Parser::plain();
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >>",
+        b"0 0 1 1 re 2 2 1 1 re W* n BT /F1 10 Tf 10 20 Td (KEEP) Tj ET",
+    );
+    let document = parser.open_bytes(&clipping_pdf(
+        "q 0 0 m 1 0 1 1 0 1 c h W n BT /F1 10 Tf 10 20 Td (CURVE) Tj ET Q 2 0 0 2 100 100 cm /Outer Do",
+        &[form],
+        0,
+    ));
+    let snapshot = document.page_objects(0).unwrap();
+    let v = snapshot.view();
+    let objects = arr(v.objects, v.objects_len);
+    let clips = arr(v.clip_paths, v.clip_paths_len);
+    let segments = arr(v.segments, v.segments_len);
+    for object in objects {
+        assert_ne!(object.flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS, 0);
+        for clip in range(clips, object.clip_path_offset, object.clip_path_count) {
+            range(segments, clip.segment_offset, clip.segment_count);
+        }
+    }
+    let curve = range(
+        clips,
+        objects[0].clip_path_offset,
+        objects[0].clip_path_count,
+    );
+    assert!(
+        range(segments, curve[0].segment_offset, curve[0].segment_count)
+            .iter()
+            .any(|s| s.kind == LITEPARSE_PATH_SEGMENT_BEZIERTO)
+    );
+    let form = objects
+        .iter()
+        .find(|o| o.kind == LITEPARSE_PAGE_OBJECT_FORM)
+        .unwrap();
+    assert_eq!((form.matrix.a, form.matrix.e), (2.0, 100.0));
+    let child = &range(objects, form.child_offset, form.child_count)[0];
+    let compound = range(clips, child.clip_path_offset, child.clip_path_count)
+        .iter()
+        .find_map(|clip| {
+            let points = range(segments, clip.segment_offset, clip.segment_count);
+            (points
+                .iter()
+                .filter(|s| s.kind == LITEPARSE_PATH_SEGMENT_MOVETO)
+                .count()
+                == 2)
+                .then_some(points)
+        })
+        .expect("compound path stays one clip path");
+    assert!(
+        compound.iter().all(|s| s.x <= 3.0 && s.y <= 3.0),
+        "ancestor form matrix must not be applied to clip points"
+    );
+}
+
+#[test]
+fn oversized_clip_stacks_are_unavailable_not_reported_as_unclipped() {
+    let parser = Parser::plain();
+    let paths = "0 0 1 1 re 2 2 1 1 re ".repeat(150);
+    let content = format!("q {paths} W* n BT /F1 10 Tf 10 20 Td (KEEP) Tj ET Q");
+    let document = parser.open_bytes(&clipping_pdf(&content, &[], 0));
+    let snapshot = document.page_objects(0).unwrap();
+    let v = snapshot.view();
+    let objects = arr(v.objects, v.objects_len);
+    assert_eq!(objects.len(), 1);
+    assert_eq!(
+        objects[0].flags & LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS,
+        0
+    );
+    assert_eq!(objects[0].clip_path_count, 0);
+    assert!(v.clip_paths.is_null() && v.clip_paths_len == 0);
+    assert!(v.segments.is_null() && v.segments_len == 0);
+    assert_clipped_text(&clipping_pdf(&content, &[], 0), "KEEP");
 }
 
 #[test]

@@ -297,6 +297,11 @@
 #define LITEPARSE_TYPE_OCR_RASTER_VIEW 56
 
 /**
+ * `liteparse_sizeof` selector for `LiteParseClipPath`.
+ */
+#define LITEPARSE_TYPE_CLIP_PATH 57
+
+/**
  * Maximum sum of flat input array bytes accepted from caller-supplied content.
  */
 #define LITEPARSE_MAX_CONTENT_INPUT_BYTES ((256 * 1024) * 1024)
@@ -469,6 +474,12 @@
  * PDFium did not return a requested image bitmap.
  */
 #define LITEPARSE_PAGE_OBJECT_FLAG_IMAGE_BITMAP_UNAVAILABLE (1 << 11)
+
+/**
+ * Clip paths were read successfully, including an empty stack (no path clip).
+ * Unavailable APIs, failed reads, or PDFium's clip-size limit leave this clear.
+ */
+#define LITEPARSE_PAGE_OBJECT_FLAG_HAS_CLIP_PATHS (1 << 12)
 
 /**
  * `LiteParsePathSegment.kind` values.
@@ -1797,7 +1808,7 @@ typedef struct {
 
 /**
  * One content object. Ranges index the view's `objects` (direct Form
- * XObject children), `segments`, and `filters` arrays. Image payloads are
+ * XObject children), `segments`, `clip_paths`, and `filters` arrays. Image payloads are
  * empty when not requested, empty, or unavailable; the `*_UNAVAILABLE`
  * flags mark requested payloads PDFium did not return.
  */
@@ -1819,6 +1830,8 @@ typedef struct {
   uint32_t child_count;
   uint32_t segment_offset;
   uint32_t segment_count;
+  uint32_t clip_path_offset;
+  uint32_t clip_path_count;
   uint32_t filter_offset;
   uint32_t filter_count;
   float stroke_width;
@@ -1850,7 +1863,8 @@ typedef struct {
 } LiteParsePageObject;
 
 /**
- * One path segment in the object's own coordinate space.
+ * One path segment. Object paths use the object's own coordinates; clip
+ * paths use y-up containing-form coordinates (page coordinates at top level).
  */
 typedef struct {
   /**
@@ -1865,6 +1879,17 @@ typedef struct {
   float y;
 } LiteParsePathSegment;
 
+/**
+ * One path in an object's clip stack. Its range indexes the view's `segments`.
+ * Points already include the object's matrix, but not ancestor form matrices.
+ * Paths are reported as-is, including curves and compound paths, not as bounds.
+ * PDFium does not expose text-based clipping or the clip's fill rule.
+ */
+typedef struct {
+  uint32_t segment_offset;
+  uint32_t segment_count;
+} LiteParseClipPath;
+
 typedef struct {
   LiteParseArenas arenas;
   const LiteParsePageObjectPage *pages;
@@ -1873,6 +1898,8 @@ typedef struct {
   size_t objects_len;
   const LiteParsePathSegment *segments;
   size_t segments_len;
+  const LiteParseClipPath *clip_paths;
+  size_t clip_paths_len;
   const LiteParseStr *filters;
   size_t filters_len;
 } LiteParsePageObjectsView;
