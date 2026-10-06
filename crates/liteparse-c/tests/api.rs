@@ -1834,7 +1834,15 @@ fn assert_clipped_text(bytes: &[u8], expected: &str) {
 #[test]
 fn clipping_filters_every_text_pipeline_and_preserves_partial_glyphs() {
     for rotation in [0, 90, 180, 270] {
-        for (edge, expected) in [(26, "ABC"), (24, "ABC"), (22, "ABC"), (21, "AB")] {
+        // Courier advances 6 pt at this size, so C is set from x = 22 and its ink starts a
+        // little past that: a clip ending at 22 touches C's loose box and none of its ink.
+        for (edge, expected) in [
+            (26, "ABC"),
+            (24, "ABC"),
+            (23, "ABC"),
+            (22, "AB"),
+            (21, "AB"),
+        ] {
             let content = format!(
                 "q 10 10 {} 30 re W n BT /F1 10 Tf 10 20 Td (ABCDE) Tj ET Q",
                 edge - 10
@@ -1906,8 +1914,11 @@ fn partially_clipped_glyphs_keep_full_raw_geometry_and_char_codes() {
         );
         let v = unsafe { liteparse_raw_text_view(raw).as_ref() }.unwrap();
         let items = arr(v.items, v.items_len);
-        assert_eq!(items.len(), 1);
-        let item = &items[0];
+        assert!(items.len() <= 1);
+        let Some(item) = items.first() else {
+            unsafe { liteparse_raw_text_free(raw) };
+            return None;
+        };
         let geometry = [
             item.x,
             item.y,
@@ -1927,26 +1938,41 @@ fn partially_clipped_glyphs_keep_full_raw_geometry_and_char_codes() {
         .to_vec();
         let result = (pooled(v, item.text), geometry, codes, item.flags);
         unsafe { liteparse_raw_text_free(raw) };
-        result
+        Some(result)
     };
     let text = "BT /F1 10 Tf 10 20 Td (A) Tj ET";
-    let original = snapshot(text);
+    let original = snapshot(text).unwrap();
     assert_eq!(original.0, "A");
-    let [left, y, width, height, ..] = original.1;
-    let right = left + width;
-    let top = 800.0 - y;
-    let bottom = top - height;
+    assert_ne!(original.3 & LITEPARSE_RAW_ITEM_FLAG_HAS_GROUNDING_BOUNDS, 0);
+    // The grounding bounds are the glyph's ink; a clip that meets them keeps the glyph whole.
+    let [_, y, _, height, _, ink_left, ink_y, ink_width, ink_height] = original.1;
+    let ink_right = ink_left + ink_width;
+    let ink_top = 800.0 - ink_y;
+    let ink_bottom = ink_top - ink_height;
     for (x, y, w, h) in [
-        (left - 1.0, bottom - 1.0, 1.1, height + 2.0),
-        (right - 0.1, bottom - 1.0, 1.1, height + 2.0),
-        (left - 1.0, bottom - 1.0, width + 2.0, 1.1),
-        (left - 1.0, top - 0.1, width + 2.0, 1.1),
+        (ink_left - 1.0, ink_bottom - 1.0, 1.1, ink_height + 2.0),
+        (ink_right - 0.1, ink_bottom - 1.0, 1.1, ink_height + 2.0),
+        (ink_left - 1.0, ink_bottom - 1.0, ink_width + 2.0, 1.1),
+        (ink_left - 1.0, ink_top - 0.1, ink_width + 2.0, 1.1),
     ] {
         assert_eq!(
             snapshot(&format!("q {x} {y} {w} {h} re W n {text} Q")),
-            original
+            Some(original.clone())
         );
     }
+    // A clip that reaches only the room the font leaves under the baseline shows no ink,
+    // so the glyph is not on the page.
+    let bottom = 800.0 - y - height;
+    assert!(ink_bottom - bottom > 0.5);
+    assert_eq!(
+        snapshot(&format!(
+            "q {} {} {} 1.1 re W n {text} Q",
+            ink_left - 1.0,
+            bottom - 1.0,
+            ink_width + 2.0
+        )),
+        None
+    );
 }
 
 #[test]
