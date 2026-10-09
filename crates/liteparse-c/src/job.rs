@@ -356,25 +356,36 @@ impl Job {
         Ok(())
     }
 
-    /// Run every OCR round with `engine`.
+    /// Run OCR with `engine` over every page that needs it, as core parsing
+    /// does: at most `num_workers` recognitions are in flight, and the next
+    /// pages are rendered as soon as one finishes, so a slow page does not
+    /// idle the other workers. The rasters in flight stay within the
+    /// per-operation raster budget, and the outcomes are merged once.
     pub(crate) fn run_ocr(&mut self, engine: &Arc<dyn OcrEngine>) -> FfiResult {
         let config = &self.source.config;
-        let (language, workers) = (config.ocr_language.clone(), config.num_workers);
-        while self.cursor < self.pages.len() {
-            let (rasters, _) =
-                self.render_round(None, workers.max(1), engine.prefers_grayscale())?;
-            if rasters.is_empty() {
-                continue;
+        let (language, workers) = (config.ocr_language.clone(), config.num_workers.max(1));
+        let grayscale = engine.prefers_grayscale();
+        let outcomes = block_on(async {
+            let mut window = stages::OcrWindow::new(engine.clone(), &language, workers);
+            while self.cursor < self.pages.len() {
+                window.complete_ready();
+                let free = window.available_capacity();
+                let in_flight = workers - free;
+                let budget = self.raster_cap(None, usize::MAX, grayscale);
+                let room = free.min(budget.saturating_sub(in_flight));
+                if room == 0 {
+                    window.complete_one().await;
+                    continue;
+                }
+                // PDFium is held only inside the round, never across an await.
+                let (rasters, _) = self.render_round(None, room, grayscale)?;
+                for raster in rasters {
+                    window.submit(raster).await;
+                }
             }
-            let outcomes = block_on(stages::recognize(
-                rasters,
-                engine.clone(),
-                &language,
-                workers,
-            ))?;
-            self.merge(outcomes)?;
-        }
-        Ok(())
+            Ok::<_, FfiError>(window.finish().await)
+        })??;
+        self.merge(outcomes)
     }
 
     /// Finish and pack the parse result.
