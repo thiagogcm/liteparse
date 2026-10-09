@@ -302,6 +302,11 @@
 #define LITEPARSE_TYPE_CLIP_PATH 57
 
 /**
+ * `liteparse_sizeof` selector for `LiteParseDocumentMetadata`.
+ */
+#define LITEPARSE_TYPE_DOCUMENT_METADATA 58
+
+/**
  * Maximum sum of flat input array bytes accepted from caller-supplied content.
  */
 #define LITEPARSE_MAX_CONTENT_INPUT_BYTES ((256 * 1024) * 1024)
@@ -362,37 +367,35 @@
 
 #define LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS (1ull << 4)
 
-#define LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA (1ull << 5)
+#define LITEPARSE_FLAG_EXTRACT_FORM_FIELDS (1ull << 5)
 
-#define LITEPARSE_FLAG_EXTRACT_FORM_FIELDS (1ull << 6)
+#define LITEPARSE_FLAG_EXTRACT_IMAGES (1ull << 6)
 
-#define LITEPARSE_FLAG_EXTRACT_IMAGES (1ull << 7)
+#define LITEPARSE_FLAG_EXTRACT_LINKS (1ull << 7)
 
-#define LITEPARSE_FLAG_EXTRACT_LINKS (1ull << 8)
+#define LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE (1ull << 8)
 
-#define LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE (1ull << 9)
+#define LITEPARSE_FLAG_EXTRACT_TEXT_METADATA (1ull << 9)
 
-#define LITEPARSE_FLAG_EXTRACT_TEXT_METADATA (1ull << 10)
+#define LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS (1ull << 10)
 
-#define LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS (1ull << 11)
+#define LITEPARSE_FLAG_EXTRACT_XFA_PACKETS (1ull << 11)
 
-#define LITEPARSE_FLAG_EXTRACT_XFA_PACKETS (1ull << 12)
+#define LITEPARSE_FLAG_INCLUDE_COMPLEXITY (1ull << 12)
 
-#define LITEPARSE_FLAG_INCLUDE_COMPLEXITY (1ull << 13)
+#define LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS (1ull << 13)
 
-#define LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS (1ull << 14)
+#define LITEPARSE_FLAG_OCR_ENABLED (1ull << 14)
 
-#define LITEPARSE_FLAG_OCR_ENABLED (1ull << 15)
+#define LITEPARSE_FLAG_OCR_FAILURE_FATAL (1ull << 15)
 
-#define LITEPARSE_FLAG_OCR_FAILURE_FATAL (1ull << 16)
+#define LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT (1ull << 16)
 
-#define LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT (1ull << 17)
+#define LITEPARSE_FLAG_RENDER_FORM_FIELDS (1ull << 17)
 
-#define LITEPARSE_FLAG_RENDER_FORM_FIELDS (1ull << 18)
+#define LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT (1ull << 18)
 
-#define LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT (1ull << 19)
-
-#define LITEPARSE_FLAG_EXTRACT_SCREENSHOTS (1ull << 20)
+#define LITEPARSE_FLAG_EXTRACT_SCREENSHOTS (1ull << 19)
 
 /**
  * `LiteParseDocumentInfo.flags` bit: the source was converted to PDF (an
@@ -917,27 +920,25 @@
 /**
  * `LiteParseResultView.flags` bits.
  */
-#define LITEPARSE_RESULT_FLAG_HAS_DOC_META (1 << 0)
+#define LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE (1 << 0)
 
-#define LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE (1 << 1)
-
-#define LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS (1 << 2)
+#define LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS (1 << 1)
 
 /**
  * Text metadata extraction was requested in the parser configuration.
  */
-#define LITEPARSE_RESULT_FLAG_TEXT_METADATA (1 << 3)
+#define LITEPARSE_RESULT_FLAG_TEXT_METADATA (1 << 2)
 
 /**
  * Produced by `liteparse_document_extract`: no projection, text, or Markdown.
  */
-#define LITEPARSE_RESULT_FLAG_EXTRACT_ONLY (1 << 4)
+#define LITEPARSE_RESULT_FLAG_EXTRACT_ONLY (1 << 3)
 
 /**
  * Extraction flattened at least one page to recover form-widget text; see
  * `flattened_page_numbers`.
  */
-#define LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS (1 << 5)
+#define LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS (1 << 4)
 
 /**
  * Extraction read an AcroForm-repaired copy of the source: its page widgets
@@ -945,7 +946,7 @@
  * adopt their fields. Everything extracted, form fields and the form type
  * included, comes from that copy; see `repaired_page_numbers`.
  */
-#define LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM (1 << 6)
+#define LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM (1 << 5)
 
 /**
  * Per-page complexity signals. Views borrow from the handle.
@@ -1683,6 +1684,52 @@ typedef struct {
 } LiteParseDocumentInfo;
 
 /**
+ * The source file's metadata. Absent strings are empty; scalars use flags.
+ */
+typedef struct {
+  /**
+   * Authored `/Info` values.
+   */
+  LiteParseStr title;
+  LiteParseStr author;
+  LiteParseStr subject;
+  LiteParseStr keywords;
+  LiteParseStr creator;
+  LiteParseStr producer;
+  LiteParseStr trapped;
+  LiteParseStr creation_date;
+  LiteParseStr mod_date;
+  LiteParseStr xmp;
+  uint64_t permissions;
+  uint64_t raw_file_size;
+  int32_t file_version;
+  int32_t security_handler_revision;
+  uint32_t eof_section_count;
+  uint32_t startxref_count;
+  uint32_t signature_count;
+  /**
+   * `LITEPARSE_DOC_META_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseDocumentMeta;
+
+/**
+ * The source file's metadata. Borrowed until the document is freed.
+ */
+typedef struct {
+  /**
+   * String pool behind the strings.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
+  /**
+   * Every field is absent for an input that was converted to PDF: the
+   * metadata is the source file's, and a conversion has none of its own.
+   */
+  LiteParseDocumentMeta meta;
+} LiteParseDocumentMetadata;
+
+/**
  * Page region in top-left-origin viewport points. Must fit within the page.
  */
 typedef struct {
@@ -1997,34 +2044,6 @@ typedef struct {
 } LiteParsePageOutput;
 
 /**
- * Document metadata. Absent strings are empty; scalars use flags.
- */
-typedef struct {
-  /**
-   * Authored `/Info` values read at document open.
-   */
-  LiteParseStr title;
-  LiteParseStr author;
-  LiteParseStr subject;
-  LiteParseStr keywords;
-  LiteParseStr trapped;
-  LiteParseStr creation_date;
-  LiteParseStr mod_date;
-  LiteParseStr xmp;
-  uint64_t permissions;
-  uint64_t raw_file_size;
-  int32_t file_version;
-  int32_t security_handler_revision;
-  uint32_t eof_section_count;
-  uint32_t startxref_count;
-  uint32_t signature_count;
-  /**
-   * `LITEPARSE_DOC_META_FLAG_*` bits.
-   */
-  uint32_t flags;
-} LiteParseDocumentMeta;
-
-/**
  * Rendered page PNG. `rect_offset/count` index the view's
  * `screenshot_rects` array.
  */
@@ -2154,7 +2173,6 @@ typedef struct {
   LiteParseStr text;
   LiteParseStr creator;
   LiteParseStr producer;
-  LiteParseDocumentMeta doc_meta;
   uint32_t image_error_count;
   /**
    * `LITEPARSE_FORM_TYPE_*`, meaningful with `HAS_FORM_TYPE`.
@@ -2371,6 +2389,21 @@ void liteparse_document_free(LiteParseDocument *document);
  * `document` must be null or live.
  */
 const LiteParseDocumentInfo *liteparse_document_info(const LiteParseDocument *document);
+
+/**
+ * Borrow the source file's metadata: the `/Info` values, dates, security,
+ * signatures, incremental-save markers and the catalog's XMP. The first
+ * call on a document reads it and the document keeps it; the view is valid
+ * until the document is freed. No parse reads or reports it: resolving the
+ * XMP loads every object of the file, which on a file with many objects
+ * takes seconds, more than parsing it. An input that was converted to PDF
+ * has none, and every field of the view's record is absent.
+ *
+ * `document` must be live and `out` writable; `out` receives null on
+ * failure.
+ */
+LiteParseStatus liteparse_document_metadata(const LiteParseDocument *document,
+                                            const LiteParseDocumentMetadata **out);
 
 /**
  * Parse 1-based pages; null with zero length selects all. Selections are

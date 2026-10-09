@@ -8,7 +8,7 @@ use crate::budget::{
 use crate::config::{LiteParseConfig, LiteParseHeader, LiteParsePageOrientationCorrection};
 use crate::content::LiteParseContentInput;
 use crate::document::LITEPARSE_MAX_SELECTED_PAGES;
-use crate::document::{LiteParseDocumentInfo, LiteParseRenderRegion};
+use crate::document::{LiteParseDocumentInfo, LiteParseDocumentMetadata, LiteParseRenderRegion};
 use crate::handle::write_out;
 use crate::handle::{LiteParseArenas, LiteParseByteView, LiteParseStr};
 use crate::job::LiteParseOcrRasterView;
@@ -228,6 +228,8 @@ pub const LITEPARSE_TYPE_OCR_PAGE_INPUT: u32 = 55;
 pub const LITEPARSE_TYPE_OCR_RASTER_VIEW: u32 = 56;
 /// `liteparse_sizeof` selector for `LiteParseClipPath`.
 pub const LITEPARSE_TYPE_CLIP_PATH: u32 = 57;
+/// `liteparse_sizeof` selector for `LiteParseDocumentMetadata`.
+pub const LITEPARSE_TYPE_DOCUMENT_METADATA: u32 = 58;
 
 /// `sizeof` the struct a `LITEPARSE_TYPE_*` selector names, or zero for an
 /// unknown selector. Lets a binding that declares layouts by hand assert
@@ -275,6 +277,7 @@ pub extern "C" fn liteparse_sizeof(type_id: u32) -> usize {
         LITEPARSE_TYPE_SCREENSHOTS_VIEW => size_of::<LiteParseScreenshotsView>(),
         LITEPARSE_TYPE_COMPLEXITY_VIEW => size_of::<LiteParseComplexityView>(),
         LITEPARSE_TYPE_DOCUMENT_INFO => size_of::<LiteParseDocumentInfo>(),
+        LITEPARSE_TYPE_DOCUMENT_METADATA => size_of::<LiteParseDocumentMetadata>(),
         LITEPARSE_TYPE_RENDER_REGION => size_of::<LiteParseRenderRegion>(),
         LITEPARSE_TYPE_CONFIG => size_of::<LiteParseConfig>(),
         LITEPARSE_TYPE_HEADER => size_of::<LiteParseHeader>(),
@@ -337,6 +340,7 @@ const ABI_TYPE_IDS: &[u32] = &[
     LITEPARSE_TYPE_SCREENSHOTS_VIEW,
     LITEPARSE_TYPE_COMPLEXITY_VIEW,
     LITEPARSE_TYPE_DOCUMENT_INFO,
+    LITEPARSE_TYPE_DOCUMENT_METADATA,
     LITEPARSE_TYPE_RENDER_REGION,
     LITEPARSE_TYPE_CONFIG,
     LITEPARSE_TYPE_HEADER,

@@ -337,7 +337,6 @@ pub(super) fn everything_config() -> LiteParseConfig {
         extract_vector_graphics: true,
         extract_annotations: true,
         extract_structure_tree: true,
-        extract_document_metadata: true,
         extract_xfa_packets: true,
         extract_screenshots: true,
         detect_screenshot_rects: true,
@@ -476,7 +475,6 @@ fn form_fields_with_ocr() {
         quiet: true,
         output_format: OutputFormat::Markdown,
         extract_form_fields: true,
-        extract_document_metadata: true,
         ..LiteParseConfig::default()
     };
     assert_parity(config, &fixture("filled_acroform.pdf"), true);
@@ -513,7 +511,6 @@ fn staged_ocr_rounds() {
     }
     let forms = LiteParseConfig {
         extract_form_fields: true,
-        extract_document_metadata: true,
         num_workers: 2,
         ..config
     };

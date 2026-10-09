@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use liteparse::config::OutputFormat;
 use liteparse::conversion::{PdfInputGuard, resolve_pdf_input};
 use liteparse::stages::{self, DocumentSignals};
-use liteparse::types::{DocumentMetadata, OutlineTarget, PdfInput};
+use liteparse::types::{OutlineTarget, PdfInput};
 use liteparse::{GlyphResolver, LiteParse as CoreLiteParse, LiteParseConfig as CoreConfig};
 use liteparse_pdfium::{Document, Library};
 
@@ -12,20 +12,20 @@ use crate::complexity::complexity;
 use crate::complexity::{ComplexityState, LiteParseComplexity};
 use crate::extract::extract_pages;
 use crate::handle::{
-    Pool, array_ptr, as_slice, create_handle, free_handle, opaque_handles, required_str, state_ref,
-    view_of, view_state,
+    Pool, array_ptr, as_slice, create_handle, free_handle, opaque_handles, required_out,
+    required_str, state_ref, view_of, view_state,
 };
 use crate::job::Job;
 use crate::outline::outline;
 use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, OcrEngineChoice, ParserState, build_parser};
 use crate::raw_text::{LiteParseRawText, extract_raw_text};
-use crate::records::{DescriptiveInfo, LiteParseOutlineEntry, pack_all};
+use crate::records::{DescriptiveInfo, LiteParseDocumentMeta, LiteParseOutlineEntry, pack_all};
 use crate::render::{RenderRequest, render_pages};
 use crate::result::{LiteParseResult, ResultState};
 use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
-use crate::status::{FfiError, FfiResult, LiteParseStatus};
+use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
 /// Page region in top-left-origin viewport points. Must fit within the page.
 #[repr(C)]
@@ -100,11 +100,6 @@ pub(crate) struct Source {
     guard: PdfInputGuard,
     pub(crate) total_pages: u32,
     pub(crate) outline: Vec<OutlineTarget>,
-    /// Whether a parse reports the source file's metadata: it was requested
-    /// and the input is the file itself, not a conversion of it.
-    reports_metadata: bool,
-    /// That metadata, read by the first parse that reports it.
-    metadata: OnceLock<SourceMetadata>,
     /// The AcroForm-repaired copy, when repair rewrote the source; made on
     /// first use by an operation that extracts form fields.
     repaired: OnceLock<Option<PdfInput>>,
@@ -116,11 +111,23 @@ pub(crate) struct Source {
     signals_pass: Mutex<()>,
 }
 
-/// What a parse reports about the source file itself.
-pub(crate) struct SourceMetadata {
-    /// Dates, security, signatures, incremental-save markers and XMP.
-    pub(crate) provenance: DocumentMetadata,
-    pub(crate) descriptive: DescriptiveInfo,
+/// The source file's metadata. Borrowed until the document is freed.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiteParseDocumentMetadata {
+    /// String pool behind the strings.
+    pub pool: *const u8,
+    pub pool_len: usize,
+    /// Every field is absent for an input that was converted to PDF: the
+    /// metadata is the source file's, and a conversion has none of its own.
+    pub meta: LiteParseDocumentMeta,
+}
+
+/// The metadata packed once, with the pool behind its strings.
+struct MetadataState {
+    #[allow(dead_code)]
+    pool: Pool,
+    view: LiteParseDocumentMetadata,
 }
 
 impl Source {
@@ -134,7 +141,6 @@ impl Source {
     ) -> FfiResult<Self> {
         let password = config.password.as_deref();
         let (input, guard) = block_on(resolve_pdf_input(input, password, false))??;
-        let reports_metadata = config.extract_document_metadata && !guard.is_converted();
         let (total_pages, outline) = {
             let lib = Library::try_init()?;
             let document =
@@ -152,39 +158,10 @@ impl Source {
             guard,
             total_pages,
             outline,
-            reports_metadata,
-            metadata: OnceLock::new(),
             repaired: OnceLock::new(),
             signals: OnceLock::new(),
             signals_pass: Mutex::new(()),
         })
-    }
-
-    /// The source file's metadata for a parse to report, read once and
-    /// only by a parse: the core resolves the catalog's XMP with a second
-    /// PDF reader that loads every object of the file, which can cost more
-    /// than parsing it, so opening a document and every other operation on
-    /// it leave it unread. `None` when it was not requested or the input was
-    /// converted.
-    pub(crate) fn metadata(&self, lib: &Library) -> FfiResult<Option<&SourceMetadata>> {
-        if !self.reports_metadata {
-            return Ok(None);
-        }
-        // `lib` is the PDFium lock, so one caller at a time reads it.
-        if self.metadata.get().is_none() {
-            let document = self.open(lib, &self.input)?;
-            let _ = self.metadata.set(SourceMetadata {
-                provenance: stages::document_metadata(&self.input, &document),
-                descriptive: DescriptiveInfo::read(&document),
-            });
-        }
-        Ok(self.metadata.get())
-    }
-
-    /// The descriptive half of [`metadata`](Self::metadata), once a parse
-    /// has read it.
-    pub(crate) fn descriptive(&self) -> Option<&DescriptiveInfo> {
-        self.metadata.get().map(|metadata| &metadata.descriptive)
     }
 
     /// The signals a parse of the whole document classifies its pages
@@ -306,6 +283,8 @@ pub(crate) struct DocumentState {
     #[allow(dead_code)]
     outline_entries: Vec<LiteParseOutlineEntry>,
     info: LiteParseDocumentInfo,
+    /// The source file's metadata, read by the first call that asks for it.
+    metadata: OnceLock<MetadataState>,
 }
 
 view_state!(DocumentState => LiteParseDocumentInfo, info);
@@ -324,6 +303,8 @@ impl DescriptiveInfo {
             author: document.meta_text("Author"),
             subject: document.meta_text("Subject"),
             keywords: document.meta_text("Keywords"),
+            creator: document.meta_text("Creator"),
+            producer: document.meta_text("Producer"),
             trapped: document.meta_text("Trapped"),
         }
     }
@@ -365,7 +346,41 @@ impl DocumentState {
             pool,
             outline_entries,
             info,
+            metadata: OnceLock::new(),
         })
+    }
+
+    /// The source file's metadata, read once: the `/Info` values, dates,
+    /// security, signatures, incremental-save markers and XMP. No parse
+    /// reads it, since the core resolves the catalog's XMP with a second PDF
+    /// reader that loads every object of the file, which can cost more than
+    /// parsing it.
+    fn metadata(&self) -> FfiResult<&LiteParseDocumentMetadata> {
+        if let Some(state) = self.metadata.get() {
+            return Ok(&state.view);
+        }
+        // PDFium is the lock one caller at a time reads it under.
+        let lib = Library::try_init()?;
+        if self.metadata.get().is_none() {
+            let mut pool = Pool::default();
+            let meta = if self.is_converted() {
+                LiteParseDocumentMeta::default()
+            } else {
+                let document = self.source.open(&lib, &self.input)?;
+                LiteParseDocumentMeta::pack(
+                    &mut pool,
+                    &stages::document_metadata(&self.input, &document),
+                    &DescriptiveInfo::read(&document),
+                )
+            };
+            let view = LiteParseDocumentMetadata {
+                pool: pool.ptr(),
+                pool_len: pool.len(),
+                meta,
+            };
+            let _ = self.metadata.set(MetadataState { pool, view });
+        }
+        Ok(&self.metadata.get().expect("set above").view)
     }
 
     pub(crate) fn source(&self) -> Arc<Source> {
@@ -469,6 +484,29 @@ pub unsafe extern "C" fn liteparse_document_info(
     document: *const LiteParseDocument,
 ) -> *const LiteParseDocumentInfo {
     unsafe { view_of(document) }
+}
+
+/// Borrow the source file's metadata: the `/Info` values, dates, security,
+/// signatures, incremental-save markers and the catalog's XMP. The first
+/// call on a document reads it and the document keeps it; the view is valid
+/// until the document is freed. No parse reads or reports it: resolving the
+/// XMP loads every object of the file, which on a file with many objects
+/// takes seconds, more than parsing it. An input that was converted to PDF
+/// has none, and every field of the view's record is absent.
+///
+/// `document` must be live and `out` writable; `out` receives null on
+/// failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_document_metadata(
+    document: *const LiteParseDocument,
+    out: *mut *const LiteParseDocumentMetadata,
+) -> LiteParseStatus {
+    boundary(|| unsafe {
+        let out = required_out(out)?;
+        out.as_ptr().write(std::ptr::null());
+        out.as_ptr().write(state_ref(document)?.metadata()?);
+        Ok(())
+    })
 }
 
 /// Parse 1-based pages; null with zero length selects all. Selections are
