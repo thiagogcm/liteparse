@@ -27,6 +27,30 @@ fn select(pages: &[u32]) -> Option<HashSet<u32>> {
     Some(pages.iter().copied().collect())
 }
 
+/// Opening a document leaves the source file's metadata unread: the first
+/// parse reads it, and only where it was requested.
+#[test]
+fn the_source_metadata_is_read_by_the_first_parse_that_reports_it() {
+    let source = source(everything_config(), &fixture("sample.pdf"), false);
+    assert!(source.descriptive().is_none());
+    let job = Job::begin(source.clone(), source.core(), None).unwrap();
+    assert!(source.descriptive().is_some());
+    assert!(job.finish(None).0.doc_meta.is_some());
+
+    let config = LiteParseConfig {
+        extract_document_metadata: false,
+        ..everything_config()
+    };
+    let source = source_of(config);
+    let job = Job::begin(source.clone(), source.core(), None).unwrap();
+    assert!(source.descriptive().is_none());
+    assert!(job.finish(None).0.doc_meta.is_none());
+}
+
+fn source_of(config: LiteParseConfig) -> std::sync::Arc<crate::document::Source> {
+    source(config, &fixture("sample.pdf"), false)
+}
+
 #[test]
 fn tolerant_ocr_render_failures_are_isolated_per_page() {
     let mut state = job_state(true);
