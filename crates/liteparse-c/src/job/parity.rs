@@ -180,7 +180,51 @@ fn composed(source: &Arc<Source>) -> ParseResult {
         job.run_ocr(&engine)
             .unwrap_or_else(|error| panic!("ocr: {}", error.message));
     }
-    job.finish().0
+    job.finish(None).0
+}
+
+/// A parse of `pages` alone, classified against `signals`: the source's own
+/// for the whole document, or none for the pages' own.
+fn selected(source: &Arc<Source>, pages: &[u32], document_signals: bool) -> ParseResult {
+    let signals = document_signals.then(|| {
+        source
+            .signals()
+            .unwrap_or_else(|error| panic!("signals: {}", error.message))
+    });
+    let engine = source.ocr_engine.clone().unwrap();
+    let mut job = Job::begin(source.clone(), source.core(), Some(pages))
+        .unwrap_or_else(|error| panic!("begin: {}", error.message));
+    if let Some(engine) = engine {
+        job.run_ocr(&engine)
+            .unwrap_or_else(|error| panic!("ocr: {}", error.message));
+    }
+    job.finish(signals).0
+}
+
+/// Every `step`th page of the whole parse must be the page a parse of it
+/// alone with the document's signals gives. Returns how many of them a
+/// parse of them alone, with their own signals, classifies differently.
+fn assert_document_signals(config: LiteParseConfig, path: &str, ocr: bool, step: usize) -> usize {
+    let source = source(config, path, ocr);
+    let whole = composed(&source);
+    let mut ranked_by_the_document = 0;
+    if whole.pages.len() < 2 {
+        return ranked_by_the_document;
+    }
+    for expected in whole.pages.iter().step_by(step) {
+        let number = expected.page_number as u32;
+        let expected = serde_json::to_value(expected).unwrap();
+        let with_signals = selected(&source, &[number], true);
+        assert_eq!(
+            expected,
+            serde_json::to_value(&with_signals.pages[0]).unwrap(),
+            "page {number} of {path} parsed with the document's signals is not the whole parse's"
+        );
+        let alone = selected(&source, &[number], false);
+        ranked_by_the_document +=
+            usize::from(expected != serde_json::to_value(&alone.pages[0]).unwrap());
+    }
+    ranked_by_the_document
 }
 
 /// The job API with the host running `MockOcr` on each round's rasters.
@@ -235,7 +279,7 @@ fn staged(source: &Arc<Source>, max_rasters: usize, pixel_format: u32) -> ParseR
             .merge(&inputs, &words, &pool)
             .unwrap_or_else(|error| panic!("merge: {}", error.message));
     }
-    state.job.finish().0
+    state.job.finish(None).0
 }
 
 fn assert_staged_parity(
@@ -326,6 +370,30 @@ fn markdown_with_every_option() {
     );
     let result = assert_parity(config, demo, false);
     assert!(!result.images.is_empty(), "the demo 10-K embeds images");
+}
+
+#[test]
+fn pages_parsed_with_document_signals_are_the_whole_parses() {
+    let config = LiteParseConfig {
+        ocr_enabled: false,
+        quiet: true,
+        output_format: OutputFormat::Markdown,
+        extract_blocks: true,
+        ..LiteParseConfig::default()
+    };
+    for path in corpus_pdfs() {
+        assert_document_signals(config.clone(), &path, false, 1);
+        assert_document_signals(ocr_config(), &path, true, 1);
+    }
+    let demo = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../demo/docs/apple-10k-2024.pdf"
+    );
+    let ranked = assert_document_signals(config, demo, false, 12);
+    assert!(
+        ranked > 0,
+        "no sampled page of the demo 10-K is classified differently alone, so the signals went untested"
+    );
 }
 
 #[test]
