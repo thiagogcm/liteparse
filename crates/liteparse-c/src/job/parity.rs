@@ -415,6 +415,12 @@ fn ocr_rounds() {
     let config = ocr_config();
     let mut ocr_pages = 0;
     for path in corpus_pdfs() {
+        // Several recognitions in flight must merge as one at a time does.
+        let several = LiteParseConfig {
+            num_workers: 4,
+            ..config.clone()
+        };
+        assert_parity(several, &path, true);
         let result = assert_parity(config.clone(), &path, true);
         ocr_pages += result
             .pages

@@ -1,6 +1,7 @@
 use std::ops::Deref;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use liteparse::config::OutputFormat;
 use liteparse::conversion::{PdfInputGuard, resolve_pdf_input};
 use liteparse::stages::{self, DocumentSignals};
 use liteparse::types::{DocumentMetadata, OutlineTarget, PdfInput};
@@ -110,6 +111,9 @@ pub(crate) struct Source {
     /// The signals of the whole document, computed by the first parse that
     /// classifies its pages against them.
     signals: OnceLock<DocumentSignals>,
+    /// Held while the signals are computed, so one caller reads the
+    /// document for them and the others wait for what it found.
+    signals_pass: Mutex<()>,
 }
 
 /// What a parse reports about the source file itself.
@@ -152,6 +156,7 @@ impl Source {
             metadata: OnceLock::new(),
             repaired: OnceLock::new(),
             signals: OnceLock::new(),
+            signals_pass: Mutex::new(()),
         })
     }
 
@@ -187,15 +192,24 @@ impl Source {
     /// of the pages such a parse reads. Computed once, from those pages read
     /// and projected and nothing else of a parse; with an OCR engine, from
     /// the pages as recognition leaves them, since recognized text is part of
-    /// what the signals are read from.
+    /// what the signals are read from. A pass that fails is not kept, and
+    /// the next caller reads the document again.
     pub(crate) fn signals(self: &Arc<Self>) -> FfiResult<&DocumentSignals> {
+        if let Some(signals) = self.signals.get() {
+            return Ok(signals);
+        }
+        // Never taken while PDFium is held: the pass takes PDFium itself.
+        let _pass = self
+            .signals_pass
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(signals) = self.signals.get() {
             return Ok(signals);
         }
         let core = self.core();
         let projected = match self.ocr_engine.clone()? {
             Some(engine) => {
-                let mut job = Job::begin(self.clone(), core, None)?;
+                let mut job = Job::begin_for_signals(self.clone(), core)?;
                 job.run_ocr(&engine)?;
                 job.projected()
             }
@@ -315,6 +329,15 @@ impl DescriptiveInfo {
     }
 }
 
+/// Which pages a parse classifies its pages against.
+#[derive(Clone, Copy)]
+enum Signals {
+    /// The pages parsed.
+    Parsed,
+    /// The pages a parse of the whole document reads.
+    Document,
+}
+
 impl DocumentState {
     fn open(parser: &ParserState, input: PdfInput) -> FfiResult<Self> {
         let source = Source::prepare(
@@ -349,33 +372,30 @@ impl DocumentState {
         self.source.clone()
     }
 
-    /// Parse through the composed stages, running OCR rounds with the
-    /// configured engine.
-    fn parse(&self, pages: Option<Vec<u32>>) -> FfiResult<ResultState> {
+    /// Parse through the composed stages, running OCR with the configured
+    /// engine, the pages classified against `signals`.
+    fn parse(&self, pages: Option<Vec<u32>>, signals: Signals) -> FfiResult<ResultState> {
         let pages = self.selection(pages)?;
+        let config = &self.config;
+        // Only a selection can differ from the document, and only where its
+        // pages are classified.
+        let signals = match signals {
+            Signals::Document
+                if pages.is_some()
+                    && (config.extract_blocks
+                        || config.output_format == OutputFormat::Markdown) =>
+            {
+                Some(self.source.signals()?)
+            }
+            _ => None,
+        };
         let core = self.core();
         let engine = self.ocr_engine.clone()?;
         let mut job = Job::begin(self.source.clone(), core, pages.as_deref())?;
         if let Some(engine) = engine {
             job.run_ocr(&engine)?;
         }
-        job.into_result(None)
-    }
-
-    /// [`parse`](Self::parse) with the selected pages classified against the
-    /// signals of the whole document, so they are the pages a parse of the
-    /// whole document holds. Without a selection that is a plain parse.
-    fn parse_with_document_signals(&self, pages: Option<Vec<u32>>) -> FfiResult<ResultState> {
-        let Some(pages) = self.selection(pages)? else {
-            return self.parse(None);
-        };
-        let signals = self.source.signals()?;
-        let engine = self.ocr_engine.clone()?;
-        let mut job = Job::begin(self.source.clone(), self.core(), Some(&pages))?;
-        if let Some(engine) = engine {
-            job.run_ocr(&engine)?;
-        }
-        job.into_result(Some(signals))
+        job.into_result(signals)
     }
 
     fn screenshot(
@@ -467,7 +487,7 @@ pub unsafe extern "C" fn liteparse_document_parse(
     unsafe {
         create_handle(out, || {
             let state = state_ref(document)?;
-            state.parse(copy_page_numbers(pages, pages_len)?)
+            state.parse(copy_page_numbers(pages, pages_len)?, Signals::Parsed)
         })
     }
 }
@@ -481,10 +501,22 @@ pub unsafe extern "C" fn liteparse_document_parse(
 /// a selection can say.
 ///
 /// The signals are those of the pages a parse of the whole document reads
-/// (`max_pages` caps them). The first call on a document reads and projects
-/// those pages once, and runs the configured OCR on them when it is enabled;
-/// the document keeps the signals for every later call. Null `pages` with
-/// zero length is `liteparse_document_parse` of every page.
+/// (`max_pages` caps them; a selected page past the cap is classified
+/// against them too). The first call on a document reads and projects those
+/// pages once, and runs the configured OCR on them when it is enabled; the
+/// document keeps the signals for every later call, and each call reads its
+/// selection again. That first read is of the whole document: where
+/// tolerant processing is off, a page outside the selection that cannot be
+/// read fails the call, and a pass that fails is not kept.
+///
+/// What a result names beyond its pages stays the selection's own: under
+/// Markdown, an image drawn again from a page outside the selection is
+/// referenced as the selection's image, which the result holds, not as the
+/// earlier one a parse of every page would name.
+///
+/// Null `pages` with zero length is `liteparse_document_parse` of every
+/// page, and so is any selection where nothing is classified (no blocks and
+/// no Markdown).
 ///
 /// `document` must be live, `pages` readable or null with zero length, and
 /// `out` writable.
@@ -498,7 +530,7 @@ pub unsafe extern "C" fn liteparse_document_parse_with_document_signals(
     unsafe {
         create_handle(out, || {
             let state = state_ref(document)?;
-            state.parse_with_document_signals(copy_page_numbers(pages, pages_len)?)
+            state.parse(copy_page_numbers(pages, pages_len)?, Signals::Document)
         })
     }
 }

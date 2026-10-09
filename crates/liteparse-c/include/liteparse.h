@@ -2395,10 +2395,22 @@ LiteParseStatus liteparse_document_parse(const LiteParseDocument *document,
  * a selection can say.
  *
  * The signals are those of the pages a parse of the whole document reads
- * (`max_pages` caps them). The first call on a document reads and projects
- * those pages once, and runs the configured OCR on them when it is enabled;
- * the document keeps the signals for every later call. Null `pages` with
- * zero length is `liteparse_document_parse` of every page.
+ * (`max_pages` caps them; a selected page past the cap is classified
+ * against them too). The first call on a document reads and projects those
+ * pages once, and runs the configured OCR on them when it is enabled; the
+ * document keeps the signals for every later call, and each call reads its
+ * selection again. That first read is of the whole document: where
+ * tolerant processing is off, a page outside the selection that cannot be
+ * read fails the call, and a pass that fails is not kept.
+ *
+ * What a result names beyond its pages stays the selection's own: under
+ * Markdown, an image drawn again from a page outside the selection is
+ * referenced as the selection's image, which the result holds, not as the
+ * earlier one a parse of every page would name.
+ *
+ * Null `pages` with zero length is `liteparse_document_parse` of every
+ * page, and so is any selection where nothing is classified (no blocks and
+ * no Markdown).
  *
  * `document` must be live, `pages` readable or null with zero length, and
  * `out` writable.

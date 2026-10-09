@@ -68,6 +68,16 @@ pub(crate) struct Job {
     raster_suffix_max: Vec<u64>,
 }
 
+/// What a job reads its pages for.
+#[derive(Clone, Copy, PartialEq)]
+enum Reads {
+    /// A parse result: everything the configuration asks of a parse.
+    Result,
+    /// The document's signals: the pages' text, as recognition leaves it,
+    /// and nothing a result alone reports.
+    Signals,
+}
+
 impl Job {
     /// Run the parse's configured pre-OCR work on the selected pages, retain
     /// extracted data for OCR rounds, then release PDFium resources.
@@ -76,14 +86,35 @@ impl Job {
         core: CoreLiteParse,
         pages: Option<&[u32]>,
     ) -> FfiResult<Self> {
+        Self::read(source, core, pages, Reads::Result)
+    }
+
+    /// [`begin`](Self::begin) over the pages a parse of the whole document
+    /// reads, for [`projected`](Self::projected) only: without the source
+    /// metadata, marked-content scoping, complexity and screenshots, which
+    /// say nothing of the pages' text and can fail on their own.
+    pub(crate) fn begin_for_signals(source: Arc<Source>, core: CoreLiteParse) -> FfiResult<Self> {
+        Self::read(source, core, None, Reads::Signals)
+    }
+
+    fn read(
+        source: Arc<Source>,
+        core: CoreLiteParse,
+        pages: Option<&[u32]>,
+        reads: Reads,
+    ) -> FfiResult<Self> {
+        let result = reads == Reads::Result;
         let config = &source.config;
         let tolerant = config.continue_on_page_error;
         let lib = Library::try_init()?;
         let input = source.extraction_input(&lib);
         let document = source.open(&lib, input)?;
-        let doc_meta = source
-            .metadata(&lib)?
-            .map(|metadata| metadata.provenance.clone());
+        let doc_meta = match reads {
+            Reads::Result => source
+                .metadata(&lib)?
+                .map(|metadata| metadata.provenance.clone()),
+            Reads::Signals => None,
+        };
         let form_type = config.extract_form_fields.then(|| document.form_type());
         let creator = document.meta_text("Creator").filter(|v| !v.is_empty());
         let producer = document.meta_text("Producer").filter(|v| !v.is_empty());
@@ -92,19 +123,22 @@ impl Job {
             .then(|| stages::xfa_packets(&document));
         let mut extracted =
             stages::extract(&document, &core.extract_request(pages, config.max_pages))?;
-        scope_marked_content_ids(
-            &lib,
-            &document,
-            input,
-            config.password.as_deref(),
-            &mut extracted,
-        )?;
+        if result {
+            scope_marked_content_ids(
+                &lib,
+                &document,
+                input,
+                config.password.as_deref(),
+                &mut extracted,
+            )?;
+        }
         let ocr_options = core.ocr_render_options(false, &extracted);
         let forms = FormRecovery::of(&extracted, source.repaired_input(&lib).is_some());
         let screenshot_options = core.screenshot_options(false);
         // Screenshots that paint form fields need a document extraction did
         // not flatten.
-        let pristine = (config.extract_screenshots
+        let screenshots = result && config.extract_screenshots;
+        let pristine = (screenshots
             && stages::screenshots_need_pristine_document(&extracted, &screenshot_options))
         .then(|| source.open(&lib, input))
         .transpose()?;
@@ -126,13 +160,13 @@ impl Job {
             })
             .collect();
         let mut complexity = Vec::new();
-        if config.include_complexity {
+        if result && config.include_complexity {
             for page in &pages {
                 let stats = page_complexity(analysis, page, tolerant, &mut page_errors)?;
                 complexity.extend(stats);
             }
         }
-        let screenshots = if config.extract_screenshots {
+        let screenshots = if screenshots {
             // A page with no visible area has no pixels: it fails alone, and
             // the renderer is never asked for it.
             let mut numbers = Vec::with_capacity(pages.len());
@@ -321,6 +355,15 @@ impl Job {
         max_rasters: usize,
         grayscale: bool,
     ) -> usize {
+        max_rasters.clamp(
+            1,
+            rasters_within_budget(self.largest_raster(selection, grayscale)),
+        )
+    }
+
+    /// Bytes of the largest raster a round from the cursor may render, at
+    /// the requested DPI.
+    fn largest_raster(&self, selection: Option<&HashSet<u32>>, grayscale: bool) -> u64 {
         let largest_rgb = match selection {
             Some(selection) => self.pages[self.cursor..]
                 .iter()
@@ -330,13 +373,11 @@ impl Job {
                 .unwrap_or(0),
             None => self.raster_suffix_max[self.cursor],
         };
-        let largest = if grayscale {
+        if grayscale {
             largest_rgb / 3
         } else {
             largest_rgb
-        };
-        let cap = (LITEPARSE_MAX_RASTER_BYTES_PER_OPERATION / largest.max(1)).max(1) as usize;
-        max_rasters.clamp(1, cap)
+        }
     }
 
     /// Merge one round's outcomes. Every failed outcome becomes a page
@@ -365,19 +406,24 @@ impl Job {
     /// does: at most `num_workers` recognitions are in flight, and the next
     /// pages are rendered as soon as one finishes, so a slow page does not
     /// idle the other workers. The rasters in flight stay within the
-    /// per-operation raster budget, and the outcomes are merged once.
+    /// per-operation raster budget, each counted as the largest in flight
+    /// since the window was last empty, and the outcomes are merged once.
     pub(crate) fn run_ocr(&mut self, engine: &Arc<dyn OcrEngine>) -> FfiResult {
         let config = &self.source.config;
         let (language, workers) = (config.ocr_language.clone(), config.num_workers.max(1));
         let grayscale = engine.prefers_grayscale();
         let outcomes = block_on(async {
             let mut window = stages::OcrWindow::new(engine.clone(), &language, workers);
+            let mut largest_in_flight = 0;
             while self.cursor < self.pages.len() {
                 window.complete_ready();
                 let free = window.available_capacity();
                 let in_flight = workers - free;
-                let budget = self.raster_cap(None, usize::MAX, grayscale);
-                let room = free.min(budget.saturating_sub(in_flight));
+                if in_flight == 0 {
+                    largest_in_flight = 0;
+                }
+                let largest = largest_in_flight.max(self.largest_raster(None, grayscale));
+                let room = free.min(rasters_within_budget(largest).saturating_sub(in_flight));
                 if room == 0 {
                     window.complete_one().await;
                     continue;
@@ -385,6 +431,7 @@ impl Job {
                 // PDFium is held only inside the round, never across an await.
                 let (rasters, _) = self.render_round(None, room, grayscale)?;
                 for raster in rasters {
+                    largest_in_flight = largest_in_flight.max(raster.pixels.len() as u64);
                     window.submit(raster).await;
                 }
             }
@@ -506,6 +553,12 @@ fn layout(
         let projected: Vec<&str> = pages.iter().map(|page| page.text.as_str()).collect();
         projected.join("\n\n")
     }
+}
+
+/// How many rasters of `largest` bytes the per-operation raster budget
+/// holds. One always fits.
+fn rasters_within_budget(largest: u64) -> usize {
+    (LITEPARSE_MAX_RASTER_BYTES_PER_OPERATION / largest.max(1)).max(1) as usize
 }
 
 /// Whether `page` has a visible area. A crop box that misses the media box
