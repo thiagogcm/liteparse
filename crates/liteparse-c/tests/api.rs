@@ -229,6 +229,41 @@ fn objects_pdf() -> Vec<u8> {
     ])
 }
 
+/// Three pages that each draw the same 2×2 grey image under a line of text.
+fn repeated_image_pdf() -> Vec<u8> {
+    let page = |contents: u32| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {contents} 0 R \
+             /Resources << /Font << /F1 9 0 R >> /XObject << /Im1 10 0 R >> >> >>"
+        )
+        .into_bytes()
+    };
+    let content = |number: u32| {
+        stream(
+            "",
+            format!(
+                "BT /F1 12 Tf 20 170 Td (Hello page {number}) Tj ET q 40 0 0 40 20 20 cm /Im1 Do Q"
+            )
+            .as_bytes(),
+        )
+    };
+    assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_vec(),
+        page(6),
+        page(7),
+        page(8),
+        content(1),
+        content(2),
+        content(3),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8",
+            &[0x00, 0xff, 0xff, 0x00],
+        ),
+    ])
+}
+
 fn many_page_objects_pdf(count: u32) -> Vec<u8> {
     let content = b"0 0 1 1 re S\n".repeat(count as usize);
     assemble(&[
@@ -1133,6 +1168,42 @@ fn a_selection_parsed_with_document_signals_is_ranked_as_the_whole_document_is()
     assert_eq!(markdown(&pair, 1), markdown(&whole, 12));
     let every = document.try_parse_with_document_signals(&[]).unwrap();
     assert_eq!(every.text(), whole.text());
+}
+
+/// A parse of every page names an image drawn again by the page that drew
+/// it first. A selection holds only its own images, so it names its own.
+#[test]
+fn a_selection_parsed_with_document_signals_references_its_own_images() {
+    let parser = Parser::new(|config| {
+        config.output_format = LITEPARSE_OUTPUT_FORMAT_MARKDOWN;
+        config.image_mode = LITEPARSE_IMAGE_MODE_EMBED;
+        config.options |= LITEPARSE_FLAG_EXTRACT_IMAGES;
+    });
+    let document = parser.open_bytes(&repeated_image_pdf());
+    let markdown =
+        |result: &Res, index: usize| pooled(result.view(), result.outputs()[index].markdown);
+    let whole = document.parse(&[]);
+    assert!(
+        markdown(&whole, 0).contains("img_p1_"),
+        "{}",
+        markdown(&whole, 0)
+    );
+    assert_eq!(markdown(&whole, 1), markdown(&whole, 0));
+
+    let second = document.try_parse_with_document_signals(&[2]).unwrap();
+    assert!(
+        markdown(&second, 0).contains("img_p2_"),
+        "{}",
+        markdown(&second, 0)
+    );
+    assert_eq!(
+        arr(
+            second.view().content.images,
+            second.view().content.images_len
+        )
+        .len(),
+        1
+    );
 }
 
 #[test]

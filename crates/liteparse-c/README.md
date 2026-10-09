@@ -278,15 +278,28 @@ out with other heading levels than in a parse of every page.
 `liteparse_document_parse_with_document_signals` classifies the selected
 pages against the signals of the whole document instead: each page is the
 page a parse of every page holds. The signals are those of the pages such a
-parse reads (`max_pages` caps them). The first call on a document reads and
-projects those pages once, without the structure, geometry, complexity,
-screenshot, or packing work of a parse, and with the configured OCR when it is
-enabled, since recognized text is part of what the signals are read from; the
-document keeps them for every later call. The signals cost one read of every
-page and each selection is then read again, so when every page is wanted,
-parse every page in one call.
-`liteparse_document_begin` has no such form: a staged parse is classified
-against its own pages, with the text the host recognized.
+parse reads (`max_pages` caps them; a selected page past the cap is
+classified against them too). The first call on a document reads and projects
+those pages once, without the source metadata, marked-content scoping,
+complexity, screenshot, or packing work of a parse, and with the configured
+OCR when it is enabled, since recognized text is part of what the signals are
+read from; the document keeps them for every later call. The signals cost one
+read of every page and each selection is then read again, so when every page
+is wanted, parse every page in one call.
+
+- That first read is of the whole document. Where tolerant processing is off,
+  a page outside the selection that cannot be read fails the call; a pass that
+  fails is not kept, and the next call reads the document again.
+- The signals are kept as the first pass found them. Where OCR failures are
+  not fatal, a page an engine failed on in that pass adds no text to them.
+- What a result names beyond its pages stays the selection's own. Under
+  Markdown, an image drawn again from a page outside the selection is
+  referenced as the selection's image, which the result holds, not as the
+  earlier one a parse of every page would name.
+- A selection where nothing is classified (no blocks and no Markdown) is a
+  plain parse, and so is no selection.
+- `liteparse_document_begin` has no such form: a staged parse is classified
+  against its own pages, with the text the host recognized.
 
 Opening a document reads its page count and outline only. The source file's
 metadata (`LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA`) is read by the first
@@ -416,7 +429,9 @@ into it.
    errors; with `LITEPARSE_FLAG_OCR_FAILURE_FATAL` the merge fails with
    `LITEPARSE_STATUS_OCR_ERROR` when every page in the round failed and one
    had sparse native text, and the job then accepts only
-   `liteparse_job_free`.
+   `liteparse_job_free`. A parse that runs the configured engine itself
+   judges this once over all of its pages, as core parsing does, so it fails
+   only when every recognized page failed.
 4. `liteparse_job_finish(&job, &result)` consumes the job, even on failure,
    and returns the result `liteparse_document_parse` produces with the same
    recognition. A rendered round left unmerged receives no OCR.
