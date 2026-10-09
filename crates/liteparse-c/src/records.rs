@@ -622,15 +622,17 @@ pub struct LiteParseXfaPacket {
     pub flags: u32,
 }
 
-/// Document metadata. Absent strings are empty; scalars use flags.
+/// The source file's metadata. Absent strings are empty; scalars use flags.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseDocumentMeta {
-    /// Authored `/Info` values read at document open.
+    /// Authored `/Info` values.
     pub title: LiteParseStr,
     pub author: LiteParseStr,
     pub subject: LiteParseStr,
     pub keywords: LiteParseStr,
+    pub creator: LiteParseStr,
+    pub producer: LiteParseStr,
     pub trapped: LiteParseStr,
     pub creation_date: LiteParseStr,
     pub mod_date: LiteParseStr,
@@ -1089,14 +1091,15 @@ impl LiteParseXfaPacket {
     }
 }
 
-/// `/Info` strings read at document open; the core `DocumentMetadata` does
-/// not carry them.
+/// `/Info` strings the core `DocumentMetadata` does not carry.
 #[derive(Clone, Default)]
 pub(crate) struct DescriptiveInfo {
     pub(crate) title: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) subject: Option<String>,
     pub(crate) keywords: Option<String>,
+    pub(crate) creator: Option<String>,
+    pub(crate) producer: Option<String>,
     pub(crate) trapped: Option<String>,
 }
 
@@ -1104,7 +1107,7 @@ impl LiteParseDocumentMeta {
     pub(crate) fn pack(
         pool: &mut Pool,
         meta: &DocumentMetadata,
-        descriptive: Option<&DescriptiveInfo>,
+        descriptive: &DescriptiveInfo,
     ) -> Self {
         let (file_version, has_file_version) = optional(meta.file_version);
         let (security_handler_revision, has_shr) = optional(meta.security_handler_revision);
@@ -1113,14 +1116,14 @@ impl LiteParseDocumentMeta {
         let (startxref_count, has_startxref) = optional(meta.startxref_count);
         let (raw_file_size, has_raw_file_size) = optional(meta.raw_file_size);
         let (signature_count, has_signature_count) = optional(meta.signature_count);
-        let mut describe = |pick: fn(&DescriptiveInfo) -> &Option<String>| {
-            pool.push_opt(descriptive.and_then(|info| pick(info).as_deref()))
-        };
-        let title = describe(|info| &info.title);
-        let author = describe(|info| &info.author);
-        let subject = describe(|info| &info.subject);
-        let keywords = describe(|info| &info.keywords);
-        let trapped = describe(|info| &info.trapped);
+        let mut describe = |value: &Option<String>| pool.push_opt(value.as_deref());
+        let title = describe(&descriptive.title);
+        let author = describe(&descriptive.author);
+        let subject = describe(&descriptive.subject);
+        let keywords = describe(&descriptive.keywords);
+        let creator = describe(&descriptive.creator);
+        let producer = describe(&descriptive.producer);
+        let trapped = describe(&descriptive.trapped);
         let flags = flag_bits(&[
             (has_file_version, LITEPARSE_DOC_META_FLAG_HAS_FILE_VERSION),
             (
@@ -1173,6 +1176,8 @@ impl LiteParseDocumentMeta {
             author,
             subject,
             keywords,
+            creator,
+            producer,
             trapped,
             creation_date: pool.push_opt(meta.creation_date.as_deref()),
             mod_date: pool.push_opt(meta.mod_date.as_deref()),

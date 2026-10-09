@@ -11,9 +11,7 @@ use liteparse::stages::{
     self, DocumentSignals, ExtractedPages, OcrRaster, OcrRenderOptions, PageComplexityStats,
     PageOcrOutcome,
 };
-use liteparse::types::{
-    DocumentMetadata, ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, XfaPacket,
-};
+use liteparse::types::{ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, XfaPacket};
 use liteparse::{LiteParse as CoreLiteParse, ParseResult, ScreenshotResult};
 use liteparse_pdfium::{Document, Library};
 
@@ -52,7 +50,6 @@ pub(crate) struct Job {
     form_type: Option<i32>,
     creator: Option<String>,
     producer: Option<String>,
-    doc_meta: Option<DocumentMetadata>,
     xfa_packets: Option<Vec<XfaPacket>>,
     screenshots: Vec<ScreenshotResult>,
     complexity: Vec<PageComplexityStats>,
@@ -90,9 +87,9 @@ impl Job {
     }
 
     /// [`begin`](Self::begin) over the pages a parse of the whole document
-    /// reads, for [`projected`](Self::projected) only: without the source
-    /// metadata, marked-content scoping, complexity and screenshots, which
-    /// say nothing of the pages' text and can fail on their own.
+    /// reads, for [`projected`](Self::projected) only: without the
+    /// marked-content scoping, complexity and screenshots, which say nothing
+    /// of the pages' text and can fail on their own.
     pub(crate) fn begin_for_signals(source: Arc<Source>, core: CoreLiteParse) -> FfiResult<Self> {
         Self::read(source, core, None, Reads::Signals)
     }
@@ -109,12 +106,6 @@ impl Job {
         let lib = Library::try_init()?;
         let input = source.extraction_input(&lib);
         let document = source.open(&lib, input)?;
-        let doc_meta = match reads {
-            Reads::Result => source
-                .metadata(&lib)?
-                .map(|metadata| metadata.provenance.clone()),
-            Reads::Signals => None,
-        };
         let form_type = config.extract_form_fields.then(|| document.form_type());
         let creator = document.meta_text("Creator").filter(|v| !v.is_empty());
         let producer = document.meta_text("Producer").filter(|v| !v.is_empty());
@@ -208,7 +199,6 @@ impl Job {
             form_type,
             creator,
             producer,
-            doc_meta,
             xfa_packets,
             screenshots,
             complexity,
@@ -448,8 +438,7 @@ impl Job {
         let source = self.source.clone();
         let forms = std::mem::take(&mut self.forms);
         let (result, geometries) = self.finish(signals);
-        let descriptive = result.doc_meta.as_ref().and(source.descriptive());
-        ResultState::parsed(&result, &source.config, descriptive, geometries, forms)
+        ResultState::parsed(&result, &source.config, geometries, forms)
     }
 
     /// The pages filtered and projected, as [`finish`](Self::finish)
@@ -500,7 +489,8 @@ impl Job {
             form_type: self.form_type,
             creator: self.creator,
             producer: self.producer,
-            doc_meta: self.doc_meta,
+            // The source file's metadata is the document's, not a parse's.
+            doc_meta: None,
             xfa_packets: self.xfa_packets,
         };
         (result, geometries)

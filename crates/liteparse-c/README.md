@@ -186,7 +186,7 @@ annotations, quadpoints, form fields, option strings, structure nodes and
 attributes, blocks, cells, rows, vector shapes and lines, and outline. The
 same struct is `LiteParseContentInput.content`. The remaining
 view fields are result-only: page outputs, document text, creator, producer,
-`doc_meta`, `form_type`, screenshots and their rects, XFA packets, figure
+`form_type`, screenshots and their rects, XFA packets, figure
 rects, item frames, projected lines and spans, and the XY-cut region tree.
 
 `LiteParsePage` carries a range into every page-scoped content array, the
@@ -243,6 +243,7 @@ rotation handling displaced content.
 | Function | Notes |
 |---|---|
 | `liteparse_document_info` | Page count, `LITEPARSE_DOCUMENT_FLAG_CONVERTED`, and bookmarks walked at open, each listed once: an outline whose links loop ends. |
+| `liteparse_document_metadata(doc, &view)` | The source file's metadata, read on the first call and kept; see Document metadata. |
 | `liteparse_document_parse(doc, pages, len, &out)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. Blocks are classified against the signals of the pages parsed. |
 | `liteparse_document_parse_with_document_signals(doc, pages, len, &out)` | Parse the given pages as pages of the whole document; see Document signals. |
 | `liteparse_document_extract(doc, pages, len, &out)` | Pre-projection pages with source page count, outline, and page geometry; set `input.content = view->content` to project and classify with `liteparse_parser_parse_content`. |
@@ -301,12 +302,23 @@ is wanted, parse every page in one call.
 - `liteparse_document_begin` has no such form: a staged parse is classified
   against its own pages, with the text the host recognized.
 
-Opening a document reads its page count and outline only. The source file's
-metadata (`LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA`) is read by the first
-parse on the document and kept: resolving the catalog's XMP loads every object
-of the file, which on a file of a few megabytes with many objects takes
-seconds, more than parsing it. Leave the flag off on a parser whose results do
-not need it.
+### Document metadata
+
+Opening a document reads its page count and outline only, and no parse reads
+or reports the source file's metadata. `liteparse_document_metadata` borrows
+it as a `LiteParseDocumentMetadata`, a string pool and one
+`LiteParseDocumentMeta`: the `/Info` values (title, author, subject, keywords,
+creator, producer, trapped), the dates, file version, security handler
+revision and permissions, signature count, incremental-save markers and the
+catalog's XMP. The first call reads it and the document keeps it; the view is
+valid until the document is freed.
+
+It is a call of its own because of what it costs: resolving the catalog's XMP
+loads every object of the file with a second PDF reader, which on a file of a
+few megabytes with many objects takes seconds, more than parsing it, and holds
+PDFium for as long. A parse result still carries the creator and producer,
+which cost nothing. An input that was converted to PDF has no metadata of the
+source's: every field of the record is absent.
 
 Page selections are validated against the document's page count (any page
 outside it is `LITEPARSE_STATUS_INVALID_ARGUMENT`), de-duplicated, and

@@ -196,13 +196,7 @@ pub unsafe extern "C" fn liteparse_parser_parse_content(
             result.page_errors = owned.page_errors;
             // Caller-supplied pages never pass through extraction, so no
             // form was flattened or repaired to read them.
-            ResultState::parsed(
-                &result,
-                config,
-                None,
-                output_geometries,
-                FormRecovery::default(),
-            )
+            ResultState::parsed(&result, config, output_geometries, FormRecovery::default())
         })
     }
 }

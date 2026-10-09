@@ -30,22 +30,21 @@ pub const LITEPARSE_FLAG_DETECT_SCREENSHOT_RECTS: u64 = 1u64 << 1;
 pub const LITEPARSE_FLAG_EXTRACT_ANNOTATIONS: u64 = 1u64 << 2;
 pub const LITEPARSE_FLAG_EXTRACT_BLOCKS: u64 = 1u64 << 3;
 pub const LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS: u64 = 1u64 << 4;
-pub const LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA: u64 = 1u64 << 5;
-pub const LITEPARSE_FLAG_EXTRACT_FORM_FIELDS: u64 = 1u64 << 6;
-pub const LITEPARSE_FLAG_EXTRACT_IMAGES: u64 = 1u64 << 7;
-pub const LITEPARSE_FLAG_EXTRACT_LINKS: u64 = 1u64 << 8;
-pub const LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE: u64 = 1u64 << 9;
-pub const LITEPARSE_FLAG_EXTRACT_TEXT_METADATA: u64 = 1u64 << 10;
-pub const LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS: u64 = 1u64 << 11;
-pub const LITEPARSE_FLAG_EXTRACT_XFA_PACKETS: u64 = 1u64 << 12;
-pub const LITEPARSE_FLAG_INCLUDE_COMPLEXITY: u64 = 1u64 << 13;
-pub const LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS: u64 = 1u64 << 14;
-pub const LITEPARSE_FLAG_OCR_ENABLED: u64 = 1u64 << 15;
-pub const LITEPARSE_FLAG_OCR_FAILURE_FATAL: u64 = 1u64 << 16;
-pub const LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT: u64 = 1u64 << 17;
-pub const LITEPARSE_FLAG_RENDER_FORM_FIELDS: u64 = 1u64 << 18;
-pub const LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT: u64 = 1u64 << 19;
-pub const LITEPARSE_FLAG_EXTRACT_SCREENSHOTS: u64 = 1u64 << 20;
+pub const LITEPARSE_FLAG_EXTRACT_FORM_FIELDS: u64 = 1u64 << 5;
+pub const LITEPARSE_FLAG_EXTRACT_IMAGES: u64 = 1u64 << 6;
+pub const LITEPARSE_FLAG_EXTRACT_LINKS: u64 = 1u64 << 7;
+pub const LITEPARSE_FLAG_EXTRACT_STRUCTURE_TREE: u64 = 1u64 << 8;
+pub const LITEPARSE_FLAG_EXTRACT_TEXT_METADATA: u64 = 1u64 << 9;
+pub const LITEPARSE_FLAG_EXTRACT_VECTOR_GRAPHICS: u64 = 1u64 << 10;
+pub const LITEPARSE_FLAG_EXTRACT_XFA_PACKETS: u64 = 1u64 << 11;
+pub const LITEPARSE_FLAG_INCLUDE_COMPLEXITY: u64 = 1u64 << 12;
+pub const LITEPARSE_FLAG_KEEP_HEADERS_FOOTERS: u64 = 1u64 << 13;
+pub const LITEPARSE_FLAG_OCR_ENABLED: u64 = 1u64 << 14;
+pub const LITEPARSE_FLAG_OCR_FAILURE_FATAL: u64 = 1u64 << 15;
+pub const LITEPARSE_FLAG_PRESERVE_VERY_SMALL_TEXT: u64 = 1u64 << 16;
+pub const LITEPARSE_FLAG_RENDER_FORM_FIELDS: u64 = 1u64 << 17;
+pub const LITEPARSE_FLAG_SKIP_DIAGONAL_TEXT: u64 = 1u64 << 18;
+pub const LITEPARSE_FLAG_EXTRACT_SCREENSHOTS: u64 = 1u64 << 19;
 
 // The destructure and mask assertion make omitted core booleans and flag gaps
 // compile-time failures.
@@ -78,6 +77,8 @@ macro_rules! config_flags {
             let CoreConfig {
                 $($field: _,)*
                 quiet: _,
+                // The source file's metadata is `liteparse_document_metadata`.
+                extract_document_metadata: _,
                 emit_word_boxes: _,
                 ocr_language: _,
                 ocr_server_url: _,
@@ -105,7 +106,6 @@ config_flags! {
     LITEPARSE_FLAG_EXTRACT_ANNOTATIONS => extract_annotations,
     LITEPARSE_FLAG_EXTRACT_BLOCKS => extract_blocks,
     LITEPARSE_FLAG_EXTRACT_CONTENT_BOUNDS => extract_content_bounds,
-    LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA => extract_document_metadata,
     LITEPARSE_FLAG_EXTRACT_FORM_FIELDS => extract_form_fields,
     LITEPARSE_FLAG_EXTRACT_IMAGES => extract_images,
     LITEPARSE_FLAG_EXTRACT_LINKS => extract_links,
