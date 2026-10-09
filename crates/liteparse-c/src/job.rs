@@ -8,9 +8,12 @@ use liteparse::LiteParseError;
 use liteparse::config::OutputFormat;
 use liteparse::ocr::{OcrEngine, OcrResult};
 use liteparse::stages::{
-    self, ExtractedPages, OcrRaster, OcrRenderOptions, PageComplexityStats, PageOcrOutcome,
+    self, DocumentSignals, ExtractedPages, OcrRaster, OcrRenderOptions, PageComplexityStats,
+    PageOcrOutcome,
 };
-use liteparse::types::{DocumentMetadata, ExtractedImage, Page, PageError, XfaPacket};
+use liteparse::types::{
+    DocumentMetadata, ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, XfaPacket,
+};
 use liteparse::{LiteParse as CoreLiteParse, ParseResult, ScreenshotResult};
 use liteparse_pdfium::{Document, Library};
 
@@ -78,7 +81,9 @@ impl Job {
         let lib = Library::try_init()?;
         let input = source.extraction_input(&lib);
         let document = source.open(&lib, input)?;
-        let doc_meta = source.doc_meta.clone();
+        let doc_meta = source
+            .metadata(&lib)?
+            .map(|metadata| metadata.provenance.clone());
         let form_type = config.extract_form_fields.then(|| document.form_type());
         let creator = document.meta_text("Creator").filter(|v| !v.is_empty());
         let producer = document.meta_text("Producer").filter(|v| !v.is_empty());
@@ -388,24 +393,39 @@ impl Job {
         self.merge(outcomes)
     }
 
-    /// Finish and pack the parse result.
-    pub(crate) fn into_result(mut self) -> FfiResult<ResultState> {
+    /// Finish and pack the parse result; see [`finish`](Self::finish).
+    pub(crate) fn into_result(
+        mut self,
+        signals: Option<&DocumentSignals>,
+    ) -> FfiResult<ResultState> {
         let source = self.source.clone();
         let forms = std::mem::take(&mut self.forms);
-        let (result, geometries) = self.finish();
-        let descriptive = result.doc_meta.as_ref().and(source.descriptive.as_ref());
+        let (result, geometries) = self.finish(signals);
+        let descriptive = result.doc_meta.as_ref().and(source.descriptive());
         ResultState::parsed(&result, &source.config, descriptive, geometries, forms)
     }
 
-    /// Filter, project, classify, and render the pages into the parse
-    /// result, with page geometries parallel to its pages.
-    pub(crate) fn finish(mut self) -> (ParseResult, PageGeometries) {
+    /// The pages filtered and projected, as [`finish`](Self::finish)
+    /// classifies them.
+    pub(crate) fn projected(mut self) -> Vec<ParsedPage> {
         stages::apply_content_filters(&mut self.pages, &self.core.content_filters());
-        let mut result = self
-            .core
-            .parse_from_pages(self.pages, self.source.outline.clone());
+        stages::project(self.pages)
+    }
+
+    /// Filter, project, classify, and render the pages into the parse
+    /// result, with page geometries parallel to its pages. The pages are
+    /// classified against `signals`, or against their own when there are
+    /// none, as core parsing classifies the pages it is given.
+    pub(crate) fn finish(
+        mut self,
+        signals: Option<&DocumentSignals>,
+    ) -> (ParseResult, PageGeometries) {
+        stages::apply_content_filters(&mut self.pages, &self.core.content_filters());
+        let mut pages = stages::project(self.pages);
+        let outline = self.source.outline.clone();
+        let mut text = layout(&self.core, &mut pages, &outline, signals);
         let mut complexity = self.complexity.into_iter().peekable();
-        for page in &mut result.pages {
+        for page in &mut pages {
             if let Some(mut stats) =
                 complexity.next_if(|stats| stats.page_number == page.page_number)
             {
@@ -414,25 +434,77 @@ impl Job {
             }
         }
         if self.source.config.output_format == OutputFormat::Markdown {
-            stages::canonicalize_image_refs(&mut result.pages, &mut result.text, &self.images);
+            stages::canonicalize_image_refs(&mut pages, &mut text, &self.images);
         }
         self.page_errors.sort_by_key(|error| error.page_number);
-        let geometries = result
-            .pages
+        let geometries = pages
             .iter()
             .map(|page| self.geometries.get(&page.page_number).copied())
             .collect();
-        result.total_pages = self.source.total_pages;
-        result.page_errors = self.page_errors;
-        result.images = self.images;
-        result.screenshots = self.screenshots;
-        result.image_error_count = self.image_error_count;
-        result.form_type = self.form_type;
-        result.creator = self.creator;
-        result.producer = self.producer;
-        result.doc_meta = self.doc_meta;
-        result.xfa_packets = self.xfa_packets;
+        let result = ParseResult {
+            total_pages: self.source.total_pages,
+            pages,
+            page_errors: self.page_errors,
+            text,
+            outline,
+            images: self.images,
+            screenshots: self.screenshots,
+            image_error_count: self.image_error_count,
+            form_type: self.form_type,
+            creator: self.creator,
+            producer: self.producer,
+            doc_meta: self.doc_meta,
+            xfa_packets: self.xfa_packets,
+        };
         (result, geometries)
+    }
+}
+
+/// Classify the projected pages and render them, the layout half of core
+/// `parse_from_pages` composed from its stages so that the signals can be
+/// those of more pages than these: each page's blocks under
+/// `extract_blocks`, its Markdown under that output format, and the
+/// document text, the pages' Markdown or their projected text. The signals
+/// are `signals`, or those of `pages` when there are none.
+fn layout(
+    core: &CoreLiteParse,
+    pages: &mut [ParsedPage],
+    outline: &[OutlineTarget],
+    signals: Option<&DocumentSignals>,
+) -> String {
+    let config = core.config();
+    let markdown = config.output_format == OutputFormat::Markdown;
+    if markdown || config.extract_blocks {
+        let own;
+        let signals = match signals {
+            Some(signals) => signals,
+            None => {
+                own = stages::document_signals(pages, config.keep_headers_footers);
+                &own
+            }
+        };
+        let options = core.block_options(outline);
+        for page in pages.iter_mut() {
+            let blocks = stages::extract_blocks(page, signals, &options);
+            if config.extract_blocks {
+                // Extraction was on, so a page with nothing to decompose
+                // reports an empty list.
+                page.blocks = Some(stages::layout_blocks(
+                    page,
+                    blocks.as_deref().unwrap_or_default(),
+                ));
+            }
+            if markdown {
+                page.markdown = stages::render_page_markdown(page, blocks.as_deref());
+            }
+        }
+    }
+    if markdown {
+        let rendered: Vec<&str> = pages.iter().map(|page| page.markdown.as_str()).collect();
+        rendered.join("\n\n-----\n\n")
+    } else {
+        let projected: Vec<&str> = pages.iter().map(|page| page.text.as_str()).collect();
+        projected.join("\n\n")
     }
 }
 
@@ -834,7 +906,7 @@ pub unsafe extern "C" fn liteparse_job_finish(
         create_handle(out, || {
             let state = state.ok_or_else(|| FfiError::invalid_argument("job must not be null"))?;
             state.usable()?;
-            state.job.into_result()
+            state.job.into_result(None)
         })
     }
 }

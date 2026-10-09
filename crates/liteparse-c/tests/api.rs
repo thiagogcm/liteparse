@@ -541,6 +541,20 @@ impl Document {
             .unwrap_or_else(|status| panic!("{status}: {}", last_error()))
     }
 
+    fn try_parse_with_document_signals(&self, pages: &[u32]) -> Result<Res, LiteParseStatus> {
+        call(
+            |out| unsafe {
+                liteparse_document_parse_with_document_signals(
+                    self.0,
+                    pages.as_ptr(),
+                    pages.len(),
+                    out,
+                )
+            },
+            Res,
+        )
+    }
+
     fn try_extract(&self, pages: &[u32]) -> Result<Res, LiteParseStatus> {
         call(
             |out| unsafe { liteparse_document_extract(self.0, pages.as_ptr(), pages.len(), out) },
@@ -1037,6 +1051,10 @@ fn page_selections_are_validated_everywhere() {
         );
         last_error_contains("out of range");
         assert_eq!(
+            document.try_parse_with_document_signals(&bad).unwrap_err(),
+            LITEPARSE_STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(
             document.try_extract(&bad).unwrap_err(),
             LITEPARSE_STATUS_INVALID_ARGUMENT
         );
@@ -1069,6 +1087,52 @@ fn page_selections_are_validated_everywhere() {
         unsafe { liteparse_document_parse(document.0, ptr::null(), 2, &mut handle) },
         LITEPARSE_STATUS_INVALID_ARGUMENT
     );
+}
+
+/// A page parsed alone is classified against itself, and heading levels
+/// drift from those of the whole document; parsed with the document's
+/// signals it is the page the whole parse holds.
+#[test]
+fn a_selection_parsed_with_document_signals_is_ranked_as_the_whole_document_is() {
+    let parser = Parser::new(|config| {
+        config.output_format = LITEPARSE_OUTPUT_FORMAT_MARKDOWN;
+        config.options |= LITEPARSE_FLAG_EXTRACT_BLOCKS;
+    });
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../demo/docs/apple-10k-2024.pdf")
+        .to_string_lossy()
+        .into_owned();
+    let document = call(
+        |out| unsafe { liteparse_document_open_path(parser.0, path.as_ptr(), path.len(), out) },
+        Document,
+    )
+    .unwrap_or_else(|status| panic!("{status}: {}", last_error()));
+    let markdown =
+        |result: &Res, index: usize| pooled(result.view(), result.outputs()[index].markdown);
+    let whole = document.parse(&[]);
+    let total = document.info().total_pages;
+    assert_eq!(whole.pages().len() as u32, total);
+
+    let mut drifted = 0;
+    for number in (1..=total).step_by(12) {
+        let expected = markdown(&whole, number as usize - 1);
+        let ranked = document
+            .try_parse_with_document_signals(&[number])
+            .unwrap_or_else(|status| panic!("{status}: {}", last_error()));
+        assert_eq!(ranked.pages().len(), 1);
+        assert_eq!(ranked.pages()[0].page_number, number);
+        assert_eq!(markdown(&ranked, 0), expected, "page {number}");
+        drifted += usize::from(markdown(&document.parse(&[number]), 0) != expected);
+    }
+    assert!(drifted > 0, "no sampled page drifts when parsed alone");
+
+    // Several pages keep the document's ranking too, and no selection is a
+    // parse of every page.
+    let pair = document.try_parse_with_document_signals(&[13, 1]).unwrap();
+    assert_eq!(markdown(&pair, 0), markdown(&whole, 0));
+    assert_eq!(markdown(&pair, 1), markdown(&whole, 12));
+    let every = document.try_parse_with_document_signals(&[]).unwrap();
+    assert_eq!(every.text(), whole.text());
 }
 
 #[test]

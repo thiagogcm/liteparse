@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
 use liteparse::conversion::{PdfInputGuard, resolve_pdf_input};
-use liteparse::stages;
+use liteparse::stages::{self, DocumentSignals};
 use liteparse::types::{DocumentMetadata, OutlineTarget, PdfInput};
 use liteparse::{GlyphResolver, LiteParse as CoreLiteParse, LiteParseConfig as CoreConfig};
 use liteparse_pdfium::{Document, Library};
@@ -99,20 +99,29 @@ pub(crate) struct Source {
     guard: PdfInputGuard,
     pub(crate) total_pages: u32,
     pub(crate) outline: Vec<OutlineTarget>,
-    /// From the source PDF at open; absent for converted inputs.
-    pub(crate) descriptive: Option<DescriptiveInfo>,
-    /// Provenance of the source file, read at open when requested; absent
-    /// for converted inputs.
-    pub(crate) doc_meta: Option<DocumentMetadata>,
+    /// Whether a parse reports the source file's metadata: it was requested
+    /// and the input is the file itself, not a conversion of it.
+    reports_metadata: bool,
+    /// That metadata, read by the first parse that reports it.
+    metadata: OnceLock<SourceMetadata>,
     /// The AcroForm-repaired copy, when repair rewrote the source; made on
     /// first use by an operation that extracts form fields.
     repaired: OnceLock<Option<PdfInput>>,
+    /// The signals of the whole document, computed by the first parse that
+    /// classifies its pages against them.
+    signals: OnceLock<DocumentSignals>,
+}
+
+/// What a parse reports about the source file itself.
+pub(crate) struct SourceMetadata {
+    /// Dates, security, signatures, incremental-save markers and XMP.
+    pub(crate) provenance: DocumentMetadata,
+    pub(crate) descriptive: DescriptiveInfo,
 }
 
 impl Source {
     /// Convert `input` to PDF once and read the facts every operation
-    /// reuses: page count, [outline](crate::outline), and descriptive
-    /// metadata.
+    /// reuses: page count and [outline](crate::outline).
     pub(crate) fn prepare(
         config: CoreConfig,
         glyph_resolver: Option<Arc<dyn GlyphResolver>>,
@@ -121,16 +130,14 @@ impl Source {
     ) -> FfiResult<Self> {
         let password = config.password.as_deref();
         let (input, guard) = block_on(resolve_pdf_input(input, password, false))??;
-        let want_metadata = config.extract_document_metadata && !guard.is_converted();
-        let (total_pages, outline, descriptive, doc_meta) = {
+        let reports_metadata = config.extract_document_metadata && !guard.is_converted();
+        let (total_pages, outline) = {
             let lib = Library::try_init()?;
             let document =
                 stages::open(&lib, &input, password, &config.page_orientation_corrections)?;
             (
                 document.page_count().max(0) as u32,
                 outline(&lib, &input, password)?,
-                want_metadata.then(|| DescriptiveInfo::read(&document)),
-                want_metadata.then(|| stages::document_metadata(&input, &document)),
             )
         };
         Ok(Self {
@@ -141,10 +148,70 @@ impl Source {
             guard,
             total_pages,
             outline,
-            descriptive,
-            doc_meta,
+            reports_metadata,
+            metadata: OnceLock::new(),
             repaired: OnceLock::new(),
+            signals: OnceLock::new(),
         })
+    }
+
+    /// The source file's metadata for a parse to report, read once and
+    /// only by a parse: the core resolves the catalog's XMP with a second
+    /// PDF reader that loads every object of the file, which can cost more
+    /// than parsing it, so opening a document and every other operation on
+    /// it leave it unread. `None` when it was not requested or the input was
+    /// converted.
+    pub(crate) fn metadata(&self, lib: &Library) -> FfiResult<Option<&SourceMetadata>> {
+        if !self.reports_metadata {
+            return Ok(None);
+        }
+        // `lib` is the PDFium lock, so one caller at a time reads it.
+        if self.metadata.get().is_none() {
+            let document = self.open(lib, &self.input)?;
+            let _ = self.metadata.set(SourceMetadata {
+                provenance: stages::document_metadata(&self.input, &document),
+                descriptive: DescriptiveInfo::read(&document),
+            });
+        }
+        Ok(self.metadata.get())
+    }
+
+    /// The descriptive half of [`metadata`](Self::metadata), once a parse
+    /// has read it.
+    pub(crate) fn descriptive(&self) -> Option<&DescriptiveInfo> {
+        self.metadata.get().map(|metadata| &metadata.descriptive)
+    }
+
+    /// The signals a parse of the whole document classifies its pages
+    /// against: the body font size, the heading levels and the running lines
+    /// of the pages such a parse reads. Computed once, from those pages read
+    /// and projected and nothing else of a parse; with an OCR engine, from
+    /// the pages as recognition leaves them, since recognized text is part of
+    /// what the signals are read from.
+    pub(crate) fn signals(self: &Arc<Self>) -> FfiResult<&DocumentSignals> {
+        if let Some(signals) = self.signals.get() {
+            return Ok(signals);
+        }
+        let core = self.core();
+        let projected = match self.ocr_engine.clone()? {
+            Some(engine) => {
+                let mut job = Job::begin(self.clone(), core, None)?;
+                job.run_ocr(&engine)?;
+                job.projected()
+            }
+            None => {
+                let mut pages = {
+                    let lib = Library::try_init()?;
+                    let document = self.open(&lib, self.extraction_input(&lib))?;
+                    let request = core.extract_request(None, self.config.max_pages);
+                    stages::extract(&document, &request)?.pages
+                };
+                stages::apply_content_filters(&mut pages, &core.content_filters());
+                stages::project(pages)
+            }
+        };
+        let signals = stages::document_signals(&projected, self.config.keep_headers_footers);
+        Ok(self.signals.get_or_init(|| signals))
     }
 
     /// Reject pages outside the document; sort and de-duplicate the rest.
@@ -292,7 +359,23 @@ impl DocumentState {
         if let Some(engine) = engine {
             job.run_ocr(&engine)?;
         }
-        job.into_result()
+        job.into_result(None)
+    }
+
+    /// [`parse`](Self::parse) with the selected pages classified against the
+    /// signals of the whole document, so they are the pages a parse of the
+    /// whole document holds. Without a selection that is a plain parse.
+    fn parse_with_document_signals(&self, pages: Option<Vec<u32>>) -> FfiResult<ResultState> {
+        let Some(pages) = self.selection(pages)? else {
+            return self.parse(None);
+        };
+        let signals = self.source.signals()?;
+        let engine = self.ocr_engine.clone()?;
+        let mut job = Job::begin(self.source.clone(), self.core(), Some(&pages))?;
+        if let Some(engine) = engine {
+            job.run_ocr(&engine)?;
+        }
+        job.into_result(Some(signals))
     }
 
     fn screenshot(
@@ -385,6 +468,37 @@ pub unsafe extern "C" fn liteparse_document_parse(
         create_handle(out, || {
             let state = state_ref(document)?;
             state.parse(copy_page_numbers(pages, pages_len)?)
+        })
+    }
+}
+
+/// Parse the given 1-based pages as pages of the whole document: like
+/// `liteparse_document_parse`, with the blocks of the selected pages
+/// classified against the signals of the whole document rather than those of
+/// the selection, so each page is the page a parse of the whole document
+/// holds. Heading levels are ranked against the document's body font size
+/// and running lines are those that repeat over its pages, neither of which
+/// a selection can say.
+///
+/// The signals are those of the pages a parse of the whole document reads
+/// (`max_pages` caps them). The first call on a document reads and projects
+/// those pages once, and runs the configured OCR on them when it is enabled;
+/// the document keeps the signals for every later call. Null `pages` with
+/// zero length is `liteparse_document_parse` of every page.
+///
+/// `document` must be live, `pages` readable or null with zero length, and
+/// `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn liteparse_document_parse_with_document_signals(
+    document: *const LiteParseDocument,
+    pages: *const u32,
+    pages_len: usize,
+    out: *mut *mut LiteParseResult,
+) -> LiteParseStatus {
+    unsafe {
+        create_handle(out, || {
+            let state = state_ref(document)?;
+            state.parse_with_document_signals(copy_page_numbers(pages, pages_len)?)
         })
     }
 }

@@ -243,7 +243,8 @@ rotation handling displaced content.
 | Function | Notes |
 |---|---|
 | `liteparse_document_info` | Page count, `LITEPARSE_DOCUMENT_FLAG_CONVERTED`, and bookmarks walked at open, each listed once: an outline whose links loop ends. |
-| `liteparse_document_parse(doc, pages, len, &out)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. |
+| `liteparse_document_parse(doc, pages, len, &out)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. Blocks are classified against the signals of the pages parsed. |
+| `liteparse_document_parse_with_document_signals(doc, pages, len, &out)` | Parse the given pages as pages of the whole document; see Document signals. |
 | `liteparse_document_extract(doc, pages, len, &out)` | Pre-projection pages with source page count, outline, and page geometry; set `input.content = view->content` to project and classify with `liteparse_parser_parse_content`. |
 | `liteparse_document_screenshot(doc, pages, len, dpi, region, &out)` | Render PNGs. `0` keeps the configured DPI. A non-null `region` (viewport points, top-left origin) renders only that part of each page, at the size and scale of the matching crop of a whole-page render; glyph anti-aliasing can differ slightly from the crop. Rectangle detection renders the whole page, then clips detected rects and makes them region-relative. |
 | `liteparse_document_complexity(doc, pages, len, &out)` | Cheap pre-OCR signals per page; tolerant failures are page errors. |
@@ -264,6 +265,35 @@ the sum of planned RGBA bitmap sizes in one operation is limited to 256 MiB.
 These are work budgets, not bounds on peak live memory (PDFium, cropped
 copies, and PNG encoding can coexist). Exceeding either returns
 `LITEPARSE_STATUS_RESOURCE_LIMIT` before the oversized bitmap is allocated.
+
+### Document signals
+
+Block classification needs two facts no page holds alone: the document's body
+font size, which heading levels are ranked against, and the lines that repeat
+over its pages, which are its running headers and footers. A parse computes
+these signals over the pages it is given, so `liteparse_document_parse` of a
+selection ranks headings against the selection, and the same page can come
+out with other heading levels than in a parse of every page.
+
+`liteparse_document_parse_with_document_signals` classifies the selected
+pages against the signals of the whole document instead: each page is the
+page a parse of every page holds. The signals are those of the pages such a
+parse reads (`max_pages` caps them). The first call on a document reads and
+projects those pages once, without the structure, geometry, complexity,
+screenshot, or packing work of a parse, and with the configured OCR when it is
+enabled, since recognized text is part of what the signals are read from; the
+document keeps them for every later call. The signals cost one read of every
+page and each selection is then read again, so when every page is wanted,
+parse every page in one call.
+`liteparse_document_begin` has no such form: a staged parse is classified
+against its own pages, with the text the host recognized.
+
+Opening a document reads its page count and outline only. The source file's
+metadata (`LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA`) is read by the first
+parse on the document and kept: resolving the catalog's XMP loads every object
+of the file, which on a file of a few megabytes with many objects takes
+seconds, more than parsing it. Leave the flag off on a parser whose results do
+not need it.
 
 Page selections are validated against the document's page count (any page
 outside it is `LITEPARSE_STATUS_INVALID_ARGUMENT`), de-duplicated, and

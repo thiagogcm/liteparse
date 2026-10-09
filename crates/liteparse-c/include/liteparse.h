@@ -2386,6 +2386,29 @@ LiteParseStatus liteparse_document_parse(const LiteParseDocument *document,
                                          LiteParseResult **out);
 
 /**
+ * Parse the given 1-based pages as pages of the whole document: like
+ * `liteparse_document_parse`, with the blocks of the selected pages
+ * classified against the signals of the whole document rather than those of
+ * the selection, so each page is the page a parse of the whole document
+ * holds. Heading levels are ranked against the document's body font size
+ * and running lines are those that repeat over its pages, neither of which
+ * a selection can say.
+ *
+ * The signals are those of the pages a parse of the whole document reads
+ * (`max_pages` caps them). The first call on a document reads and projects
+ * those pages once, and runs the configured OCR on them when it is enabled;
+ * the document keeps the signals for every later call. Null `pages` with
+ * zero length is `liteparse_document_parse` of every page.
+ *
+ * `document` must be live, `pages` readable or null with zero length, and
+ * `out` writable.
+ */
+LiteParseStatus liteparse_document_parse_with_document_signals(const LiteParseDocument *document,
+                                                               const uint32_t *pages,
+                                                               size_t pages_len,
+                                                               LiteParseResult **out);
+
+/**
  * Extract pre-projection pages: heuristic text items, graphics, and the
  * configured extras, with no projection, OCR, text, or Markdown. Links are
  * stamped as parse stamps them, only under Markdown, and every text item
