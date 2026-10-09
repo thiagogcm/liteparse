@@ -21,21 +21,20 @@ opaque_handles! {
 }
 
 /// `LiteParseResultView.flags` bits.
-pub const LITEPARSE_RESULT_FLAG_HAS_DOC_META: u32 = 1 << 0;
-pub const LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE: u32 = 1 << 1;
-pub const LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS: u32 = 1 << 2;
+pub const LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE: u32 = 1 << 0;
+pub const LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS: u32 = 1 << 1;
 /// Text metadata extraction was requested in the parser configuration.
-pub const LITEPARSE_RESULT_FLAG_TEXT_METADATA: u32 = 1 << 3;
+pub const LITEPARSE_RESULT_FLAG_TEXT_METADATA: u32 = 1 << 2;
 /// Produced by `liteparse_document_extract`: no projection, text, or Markdown.
-pub const LITEPARSE_RESULT_FLAG_EXTRACT_ONLY: u32 = 1 << 4;
+pub const LITEPARSE_RESULT_FLAG_EXTRACT_ONLY: u32 = 1 << 3;
 /// Extraction flattened at least one page to recover form-widget text; see
 /// `flattened_page_numbers`.
-pub const LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS: u32 = 1 << 5;
+pub const LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS: u32 = 1 << 4;
 /// Extraction read an AcroForm-repaired copy of the source: its page widgets
 /// were orphaned from a missing `/AcroForm`, which was rebuilt in memory to
 /// adopt their fields. Everything extracted, form fields and the form type
 /// included, comes from that copy; see `repaired_page_numbers`.
-pub const LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM: u32 = 1 << 6;
+pub const LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM: u32 = 1 << 5;
 
 /// How extraction recovered the document's form content: the facts behind
 /// `LITEPARSE_RESULT_FLAG_FLATTENED_FORM_WIDGETS` and
@@ -110,7 +109,6 @@ pub struct LiteParseResultView {
     pub text: LiteParseStr,
     pub creator: LiteParseStr,
     pub producer: LiteParseStr,
-    pub doc_meta: LiteParseDocumentMeta,
     pub image_error_count: u32,
     /// `LITEPARSE_FORM_TYPE_*`, meaningful with `HAS_FORM_TYPE`.
     pub form_type: i32,
@@ -153,7 +151,6 @@ struct ResultFacts {
     text: LiteParseStr,
     creator: LiteParseStr,
     producer: LiteParseStr,
-    doc_meta: Option<LiteParseDocumentMeta>,
     total_pages: u32,
     image_error_count: u32,
     form_type: Option<i32>,
@@ -176,7 +173,6 @@ impl ResultState {
     pub(crate) fn parsed(
         result: &ParseResult,
         config: &CoreConfig,
-        descriptive: Option<&DescriptiveInfo>,
         geometries: PageGeometries,
         forms: FormRecovery,
     ) -> FfiResult<Self> {
@@ -214,10 +210,6 @@ impl ResultState {
             text: pool.push(&result.text),
             creator: pool.push_opt(result.creator.as_deref()),
             producer: pool.push_opt(result.producer.as_deref()),
-            doc_meta: result
-                .doc_meta
-                .as_ref()
-                .map(|meta| LiteParseDocumentMeta::pack(pool, meta, descriptive)),
             total_pages: result.total_pages,
             image_error_count: result.image_error_count,
             form_type: result.form_type,
@@ -254,7 +246,6 @@ impl ResultState {
             text: LiteParseStr::default(),
             creator: LiteParseStr::default(),
             producer: LiteParseStr::default(),
-            doc_meta: None,
             total_pages,
             image_error_count: pages.image_error_count,
             form_type,
@@ -269,7 +260,6 @@ impl ResultState {
         packed.check()?;
         let flags = facts.flags
             | flag_bits(&[
-                (facts.doc_meta.is_some(), LITEPARSE_RESULT_FLAG_HAS_DOC_META),
                 (
                     facts.form_type.is_some(),
                     LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE,
@@ -283,7 +273,6 @@ impl ResultState {
             text: facts.text,
             creator: facts.creator,
             producer: facts.producer,
-            doc_meta: facts.doc_meta.unwrap_or_default(),
             image_error_count: facts.image_error_count,
             form_type: facts.form_type.unwrap_or(LITEPARSE_FORM_TYPE_NONE),
             flags,

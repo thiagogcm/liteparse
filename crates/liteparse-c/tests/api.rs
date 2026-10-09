@@ -416,6 +416,12 @@ impl Pooled for LiteParseDocumentInfo {
     }
 }
 
+impl Pooled for LiteParseDocumentMetadata {
+    fn pool(&self) -> &[u8] {
+        arr(self.pool, self.pool_len)
+    }
+}
+
 /// Read a pooled string, checking its range and NUL terminator.
 fn pooled(owner: &impl Pooled, value: LiteParseStr) -> String {
     let pool = owner.pool();
@@ -562,6 +568,13 @@ struct Document(*mut LiteParseDocument);
 impl Document {
     fn info(&self) -> &LiteParseDocumentInfo {
         unsafe { liteparse_document_info(self.0).as_ref() }.expect("info")
+    }
+
+    fn metadata(&self) -> &LiteParseDocumentMetadata {
+        let mut out = ptr::null();
+        let status = unsafe { liteparse_document_metadata(self.0, &mut out) };
+        assert_eq!(status, LITEPARSE_STATUS_OK, "{}", last_error());
+        unsafe { out.as_ref() }.expect("metadata")
     }
 
     fn try_parse(&self, pages: &[u32]) -> Result<Res, LiteParseStatus> {
@@ -1390,7 +1403,6 @@ fn empty_optional_collections_are_null_with_flags() {
     assert_ne!(view.flags & LITEPARSE_RESULT_FLAG_HAS_XFA_PACKETS, 0);
     assert!(view.xfa_packets.is_null() && view.xfa_packets_len == 0);
     assert_eq!(view.flags & LITEPARSE_RESULT_FLAG_HAS_FORM_TYPE, 0);
-    assert_eq!(view.flags & LITEPARSE_RESULT_FLAG_HAS_DOC_META, 0);
 }
 
 #[test]
@@ -3057,10 +3069,8 @@ fn parse_content_round_trips_supplied_blocks_and_merged_tables() {
 }
 
 #[test]
-fn forms_and_metadata_pack_on_parse_and_extract() {
-    let parser = Parser::new(|c| {
-        c.options |= LITEPARSE_FLAG_EXTRACT_FORM_FIELDS | LITEPARSE_FLAG_EXTRACT_DOCUMENT_METADATA;
-    });
+fn forms_pack_on_parse_and_extract() {
+    let parser = Parser::new(|c| c.options |= LITEPARSE_FLAG_EXTRACT_FORM_FIELDS);
     let document = parser.open("filled_acroform.pdf");
     for result in [document.parse(&[]), document.extract(&[])] {
         let view = result.view();
@@ -3082,13 +3092,51 @@ fn forms_and_metadata_pack_on_parse_and_extract() {
             check_str(view, field.value);
         }
     }
+}
+
+/// The source file's metadata is the document's: read by the call that asks
+/// for it, kept, and no part of a parse.
+#[test]
+fn document_metadata_is_read_once_on_request() {
+    let parser = Parser::plain();
+    let document = parser.open("filled_acroform.pdf");
+    let metadata = document.metadata();
+    let meta = &metadata.meta;
+    assert_ne!(meta.flags & LITEPARSE_DOC_META_FLAG_HAS_RAW_FILE_SIZE, 0);
+    assert!(meta.raw_file_size > 0);
+    assert_ne!(meta.flags & LITEPARSE_DOC_META_FLAG_HAS_FILE_VERSION, 0);
+    for value in [
+        meta.title,
+        meta.author,
+        meta.subject,
+        meta.keywords,
+        meta.creator,
+        meta.producer,
+        meta.trapped,
+        meta.creation_date,
+        meta.mod_date,
+        meta.xmp,
+    ] {
+        check_str(metadata, value);
+    }
     let parsed = document.parse(&[]);
-    assert_ne!(parsed.view().flags & LITEPARSE_RESULT_FLAG_HAS_DOC_META, 0);
-    assert_ne!(
-        parsed.view().doc_meta.flags & LITEPARSE_DOC_META_FLAG_HAS_RAW_FILE_SIZE,
-        0
+    assert_eq!(
+        pooled(metadata, meta.producer),
+        pooled(parsed.view(), parsed.view().producer)
     );
-    assert!(parsed.view().doc_meta.raw_file_size > 0);
+    // The document keeps what it read.
+    assert!(ptr::eq(metadata, document.metadata()));
+
+    let mut out = ptr::dangling();
+    assert_eq!(
+        unsafe { liteparse_document_metadata(ptr::null(), &mut out) },
+        LITEPARSE_STATUS_INVALID_ARGUMENT
+    );
+    assert!(out.is_null());
+    assert_eq!(
+        unsafe { liteparse_document_metadata(document.0, ptr::null_mut()) },
+        LITEPARSE_STATUS_INVALID_ARGUMENT
+    );
 }
 
 #[test]

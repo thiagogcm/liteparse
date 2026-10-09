@@ -579,6 +579,7 @@ int main(int argc, char **argv) {
       liteparse_sizeof(LITEPARSE_TYPE_PAGE_OBJECTS_VIEW) != sizeof(LiteParsePageObjectsView) ||
       liteparse_sizeof(LITEPARSE_TYPE_TEXT_ITEM) != sizeof(LiteParseTextItem) ||
       liteparse_sizeof(LITEPARSE_TYPE_RESULT_VIEW) != sizeof(LiteParseResultView) ||
+      liteparse_sizeof(LITEPARSE_TYPE_DOCUMENT_METADATA) != sizeof(LiteParseDocumentMetadata) ||
       liteparse_sizeof(LITEPARSE_TYPE_STR) != sizeof(LiteParseStr) || liteparse_sizeof(9999) != 0) {
     return fail("sizeof table");
   }
