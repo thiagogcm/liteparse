@@ -349,10 +349,21 @@
 #define LITEPARSE_DEFAULT_DPI 150.0
 
 /**
- * `LiteParseConfig.options` bit: apply `crop_box`. Presence bits count down
- * from bit 63; boolean flags count up from bit 0.
+ * `LiteParseConfig.options` bit: apply `crop_box`. Bits that mirror no core
+ * boolean count down from bit 63; boolean flags count up from bit 0.
  */
 #define LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX (1ull << 63)
+
+/**
+ * `LiteParseConfig.options` bit: keep what recognition reads inside the
+ * images of a page. On a page with native text the merge drops every word
+ * of an image whose words are mostly numbers and short tokens, as the
+ * labels of a chart are. A scan under a thin text layer, a stamp or a
+ * printed footer, is one image of dense text, and in a language of short
+ * words that rule drops it whole. For a caller that sends to recognition
+ * only pages it knows to be scans. Nothing else of the merge changes.
+ */
+#define LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT (1ull << 62)
 
 /**
  * `LiteParseConfig.options` bits, whose presence denotes true.

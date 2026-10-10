@@ -220,3 +220,74 @@ fn unmapped_text_is_garbled_in_complexity_and_native_ocr_predicates() {
         assert_eq!(round[0].has_native_text, !garbled);
     }
 }
+
+#[test]
+fn keeping_figure_text_drops_no_image_as_a_chart() {
+    use liteparse::ocr::OcrResult;
+    use liteparse::types::{Rect, TextItem};
+
+    // Short words inside one image: beside native text the merge reads them
+    // as the labels of a chart and drops every one. The bar a ruling was
+    // misread as is dropped either way.
+    let merged = |keep_figure_text: bool| {
+        let path = fixture("sample.pdf");
+        let source = Source::prepare(
+            everything_config(),
+            None,
+            Ok(None),
+            keep_figure_text,
+            PdfInput::Path(path),
+        )
+        .unwrap();
+        let source = std::sync::Arc::new(source);
+        let mut job = Job::begin(source.clone(), source.core(), Some(&[1])).unwrap();
+        job.pages[0].text_items = vec![TextItem {
+            text: "printed footer".into(),
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 8.0,
+            ..Default::default()
+        }];
+        let mut results: Vec<OcrResult> = ["de", "da", "do", "em", "que", "com", "por", "na"]
+            .iter()
+            .enumerate()
+            .map(|(row, word)| {
+                let top = 200.0 + 20.0 * row as f32;
+                OcrResult {
+                    text: (*word).into(),
+                    bbox: [100.0, top, 130.0, top + 10.0],
+                    confidence: 0.9,
+                    polygon: None,
+                }
+            })
+            .collect();
+        results.push(OcrResult {
+            text: "|".into(),
+            bbox: [200.0, 200.0, 202.0, 240.0],
+            confidence: 0.9,
+            polygon: None,
+        });
+        job.merge(vec![PageOcrOutcome {
+            page_number: 1,
+            dpi: 72.0,
+            has_native_text: true,
+            image_rects: vec![Rect {
+                x: 50.0,
+                y: 150.0,
+                width: 300.0,
+                height: 300.0,
+            }],
+            results,
+            error: None,
+        }])
+        .unwrap();
+        job.pages[0].text_items.len()
+    };
+    assert_eq!(merged(false), 1, "the labels of a chart are dropped");
+    assert_eq!(
+        merged(true),
+        9,
+        "the words are kept, the misread ruling is not"
+    );
+}

@@ -374,10 +374,15 @@ impl Job {
     /// error; only fatal OCR passes the failures on to the core merge,
     /// which decides whether they fail the parse. Recognized words carry
     /// word boxes under the same rule extraction used for native text.
+    /// Under `LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT` the merge is told
+    /// of no image, so it judges none a chart and drops no words for it.
     pub(crate) fn merge(&mut self, mut outcomes: Vec<PageOcrOutcome>) -> FfiResult {
         let fatal = self.source.config.ocr_failure_fatal;
         let emit_word_boxes = self.source.config.effective_emit_word_boxes();
         for outcome in &mut outcomes {
+            if self.source.ocr_keep_figure_text {
+                outcome.image_rects.clear();
+            }
             if let Some(message) = &outcome.error {
                 self.page_errors.push(PageError {
                     page_number: outcome.page_number as u32,

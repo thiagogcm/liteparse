@@ -1016,8 +1016,10 @@ fn parser_new_validates_config() {
         c.crop_box = [0.6, 0.0, 0.6, 0.0];
     });
     reject(LITEPARSE_STATUS_INVALID_CONFIG, "unknown bits", &|c| {
-        c.options = 1u64 << 62
+        c.options = 1u64 << 61
     });
+    // Keeping the text of figures is a known bit.
+    Parser::new(|c| c.options |= LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT);
     reject(LITEPARSE_STATUS_INVALID_CONFIG, "output format", &|c| {
         c.output_format = 9
     });

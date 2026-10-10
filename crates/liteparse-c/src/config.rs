@@ -20,9 +20,22 @@ pub const LITEPARSE_IMAGE_MODE_EMBED: u32 = 2;
 /// Default resolution in DPI for raster rendering and screenshots.
 pub const LITEPARSE_DEFAULT_DPI: f32 = 150.0;
 
-/// `LiteParseConfig.options` bit: apply `crop_box`. Presence bits count down
-/// from bit 63; boolean flags count up from bit 0.
+/// `LiteParseConfig.options` bit: apply `crop_box`. Bits that mirror no core
+/// boolean count down from bit 63; boolean flags count up from bit 0.
 pub const LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX: u64 = 1u64 << 63;
+
+/// `LiteParseConfig.options` bit: keep what recognition reads inside the
+/// images of a page. On a page with native text the merge drops every word
+/// of an image whose words are mostly numbers and short tokens, as the
+/// labels of a chart are. A scan under a thin text layer, a stamp or a
+/// printed footer, is one image of dense text, and in a language of short
+/// words that rule drops it whole. For a caller that sends to recognition
+/// only pages it knows to be scans. Nothing else of the merge changes.
+pub const LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT: u64 = 1u64 << 62;
+
+/// The `LiteParseConfig.options` bits that mirror no core boolean.
+const OWN_FLAGS: u64 =
+    LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX | LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT;
 
 /// `LiteParseConfig.options` bits, whose presence denotes true.
 pub const LITEPARSE_FLAG_CONTINUE_ON_PAGE_ERROR: u64 = 1u64 << 0;
@@ -67,8 +80,8 @@ macro_rules! config_flags {
                 "config_flags! must list every LITEPARSE_FLAG_* exactly once"
             );
             assert!(
-                KNOWN_BOOL_FLAGS & LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX == 0,
-                "boolean flags must not reach the presence bits"
+                KNOWN_BOOL_FLAGS & OWN_FLAGS == 0,
+                "boolean flags must not reach the bits that mirror no core boolean"
             );
         };
 
@@ -237,11 +250,13 @@ impl SizedInput for LiteParseConfig {
 pub(crate) struct OwnedParserConfig {
     pub core: CoreConfig,
     pub font_db_dir: Option<std::path::PathBuf>,
+    /// `LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT`.
+    pub ocr_keep_figure_text: bool,
 }
 
 pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<OwnedParserConfig> {
     let raw = unsafe { sized_input(raw) }?;
-    if raw.options & !(KNOWN_BOOL_FLAGS | LITEPARSE_CONFIG_FLAG_HAS_CROP_BOX) != 0 {
+    if raw.options & !(KNOWN_BOOL_FLAGS | OWN_FLAGS) != 0 {
         return Err(FfiError::invalid_config(
             "config.options contains unknown bits",
         ));
@@ -339,6 +354,7 @@ pub(crate) unsafe fn owned_config(raw: *const LiteParseConfig) -> FfiResult<Owne
     Ok(OwnedParserConfig {
         core: config,
         font_db_dir,
+        ocr_keep_figure_text: raw.options & LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT != 0,
     })
 }
 
