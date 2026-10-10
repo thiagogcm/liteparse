@@ -96,6 +96,8 @@ pub(crate) struct Source {
     pub(crate) glyph_resolver: Option<Arc<dyn GlyphResolver>>,
     /// The parser's configured OCR engine choice.
     pub(crate) ocr_engine: OcrEngineChoice,
+    /// `LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT`.
+    pub(crate) ocr_keep_figure_text: bool,
     pub(crate) input: PdfInput,
     guard: PdfInputGuard,
     pub(crate) total_pages: u32,
@@ -137,6 +139,7 @@ impl Source {
         config: CoreConfig,
         glyph_resolver: Option<Arc<dyn GlyphResolver>>,
         ocr_engine: OcrEngineChoice,
+        ocr_keep_figure_text: bool,
         input: PdfInput,
     ) -> FfiResult<Self> {
         let password = config.password.as_deref();
@@ -154,6 +157,7 @@ impl Source {
             config,
             glyph_resolver,
             ocr_engine,
+            ocr_keep_figure_text,
             input,
             guard,
             total_pages,
@@ -325,6 +329,7 @@ impl DocumentState {
             parser.config().clone(),
             parser.glyph_resolver(),
             parser.ocr_engine(),
+            parser.ocr_keep_figure_text(),
             input,
         )?;
         let mut pool = Pool::default();

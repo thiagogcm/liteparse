@@ -143,7 +143,7 @@ pub(super) fn snapshot(result: &ParseResult) -> Snapshot {
 }
 
 pub(super) fn source(config: LiteParseConfig, path: &str, ocr: bool) -> Arc<Source> {
-    let source = Source::prepare(config, None, Ok(None), PdfInput::Path(path.into()))
+    let source = Source::prepare(config, None, Ok(None), false, PdfInput::Path(path.into()))
         .unwrap_or_else(|error| panic!("prepare {path}: {}", error.message));
     Arc::new(if ocr {
         source.with_ocr_engine(Arc::new(MockOcr))

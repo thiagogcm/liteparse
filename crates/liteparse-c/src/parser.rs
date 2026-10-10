@@ -25,6 +25,8 @@ pub(crate) struct ParserState {
     /// The configured engine, or why OCR is enabled without one; built once
     /// and shared by every document.
     ocr_engine: OcrEngineChoice,
+    /// `LITEPARSE_CONFIG_FLAG_OCR_KEEP_FIGURE_TEXT`.
+    ocr_keep_figure_text: bool,
 }
 
 pub(crate) type OcrEngineChoice = Result<Option<Arc<dyn OcrEngine>>, FfiError>;
@@ -40,6 +42,10 @@ impl ParserState {
 
     pub(crate) fn ocr_engine(&self) -> OcrEngineChoice {
         self.ocr_engine.clone()
+    }
+
+    pub(crate) fn ocr_keep_figure_text(&self) -> bool {
+        self.ocr_keep_figure_text
     }
 }
 
@@ -85,6 +91,7 @@ pub unsafe extern "C" fn liteparse_parser_new(
                 config: owned.core,
                 glyph_resolver,
                 ocr_engine,
+                ocr_keep_figure_text: owned.ocr_keep_figure_text,
             })
         })
     }
