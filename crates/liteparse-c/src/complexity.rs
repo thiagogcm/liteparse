@@ -86,7 +86,7 @@ pub(crate) fn complexity(
     pages: Option<&[u32]>,
 ) -> FfiResult<(Vec<PageComplexityStats>, Vec<PageError>)> {
     let config = &source.config;
-    let (pages, mut stats, errors) = {
+    let (mut pages, mut stats, errors) = {
         let lib = Library::try_init()?;
         let document = source.open(&lib, &source.input)?;
         // Images and links are irrelevant to complexity, so skip them.
@@ -112,6 +112,8 @@ pub(crate) fn complexity(
         errors.sort_by_key(|error| error.page_number);
         (kept, stats, errors)
     };
+    // As a parse orders it: complexity sees every item, layout the filtered page.
+    stages::apply_content_filters(&mut pages, &core.content_filters());
     for (page_stats, page) in stats.iter_mut().zip(stages::project(pages)) {
         page_stats.layout = Some(stages::layout_complexity(&page));
     }
