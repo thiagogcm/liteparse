@@ -146,6 +146,29 @@ fn complexity_matches_core_is_complex() {
     }
 }
 
+/// Complexity lays out the pages a parse would: with diagonal text filtered
+/// out, the column it stood in is not counted, as core's `is_complex` has it.
+#[test]
+fn complexity_applies_content_filters_as_core_does() {
+    let path = fixture("diagonal_column.pdf");
+    let config = LiteParseConfig {
+        skip_diagonal_text: true,
+        ..everything_config()
+    };
+    let source = source(config, &path, false);
+    let core = source.core();
+    let expected = block_on(core.is_complex(PdfInput::Path(path.clone())))
+        .unwrap()
+        .unwrap();
+    let (actual, errors) = crate::complexity::complexity(&source, &core, None).unwrap();
+    assert!(errors.is_empty());
+    assert_eq!(actual[0].layout.as_ref().unwrap().column_count, 1);
+    assert_eq!(
+        serde_json::to_value(&expected).unwrap(),
+        serde_json::to_value(&actual).unwrap()
+    );
+}
+
 #[test]
 fn unmapped_text_is_garbled_in_complexity_and_native_ocr_predicates() {
     use crate::records::{LITEPARSE_COMPLEXITY_FLAG_IS_GARBLED, LiteParsePageComplexity};
