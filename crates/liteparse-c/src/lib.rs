@@ -25,6 +25,8 @@ mod runtime;
 pub mod screenshots;
 pub mod status;
 mod structure;
+#[cfg(feature = "tesseract")]
+mod tessdata;
 #[cfg(test)]
 mod test_pdf;
 

@@ -87,6 +87,11 @@ pub unsafe extern "C" fn liteparse_parser_new(
             let ocr_engine = build_parser(owned.core.clone(), None, glyph_resolver.clone())
                 .ocr_engine()
                 .map_err(FfiError::from);
+            // A named tessdata directory is the host's: missing data fails, never downloads.
+            #[cfg(feature = "tesseract")]
+            let ocr_engine = ocr_engine.map(|engine| {
+                crate::tessdata::provisioned(engine, owned.core.tessdata_path.as_deref())
+            });
             Ok(ParserState {
                 config: owned.core,
                 glyph_resolver,
