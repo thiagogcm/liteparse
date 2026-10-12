@@ -24,8 +24,11 @@ cargo build --release -p liteparse-c --no-default-features
 
 Drop `--no-default-features` to compile the Tesseract backend. The build
 produces a shared library and a static library. At runtime PDFium is loaded
-dynamically: it must sit beside the library, on the platform library path, or
-in the directory named by `PDFIUM_LIB_PATH`.
+dynamically. A host that ships its own PDFium names the file with
+`liteparse_pdfium_load` before the first document is opened, and no search
+is made. Without that call, the first open searches the directory named by
+`PDFIUM_LIB_PATH`, the directory baked in at build time, the directory of this
+library, the directory of the executable, then the platform library path.
 
 Regenerate the header whenever the exported ABI changes:
 
