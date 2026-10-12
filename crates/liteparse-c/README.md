@@ -30,6 +30,11 @@ is made. Without that call, the first open searches the directory named by
 `PDFIUM_LIB_PATH`, the directory baked in at build time, the directory of this
 library, the directory of the executable, then the platform library path.
 
+With the Tesseract backend, a `tessdata_path` in `LiteParseConfig` names a
+directory the host provisions: a language missing from it fails that page's
+recognition, and nothing is downloaded into it. Without one, the core's own
+lookup and first-use download apply.
+
 Regenerate the header whenever the exported ABI changes:
 
 ```bash

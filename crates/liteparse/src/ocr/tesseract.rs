@@ -39,7 +39,7 @@ impl TesseractOcrEngine {
     /// Normalize a tesseract language spec, which may be a single code or a
     /// `+`-separated list (e.g. `ita+eng`). Each component is normalized
     /// independently and rejoined with `+`.
-    fn normalize_language(lang: &str) -> String {
+    pub fn normalize_language(lang: &str) -> String {
         lang.split('+')
             .filter(|part| !part.trim().is_empty())
             .map(Self::normalize_language_code)
