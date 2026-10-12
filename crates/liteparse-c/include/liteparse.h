@@ -2630,6 +2630,25 @@ LiteParseStatus liteparse_parser_new(const LiteParseConfig *config, LiteParsePar
 void liteparse_parser_free(LiteParseParser *parser);
 
 /**
+ * Load PDFium for this process from the file at `path`: UTF-8, `path_len`
+ * bytes, no terminating NUL, and absolute, so the dynamic linker opens that
+ * file and never searches. Call it before the first document is opened.
+ *
+ * Without this call, the first open searches for PDFium (the
+ * `PDFIUM_LIB_PATH` environment variable, the directory baked in at build
+ * time, beside this library, beside the executable, then the system search
+ * path). After it, that search is never made. A process holds one PDFium:
+ * calling again with the same file succeeds and does nothing, and calling
+ * with another file fails with `LITEPARSE_STATUS_INVALID_ARGUMENT`. Once a
+ * first open has loaded PDFium through the search, this call cannot replace
+ * it and reports success.
+ *
+ * `LITEPARSE_STATUS_DEPENDENCY_UNAVAILABLE` means the file could not be
+ * loaded or does not export PDFium's API; `liteparse_last_error` says why.
+ */
+LiteParseStatus liteparse_pdfium_load(const uint8_t *path, size_t path_len);
+
+/**
  * Destroy a raw-text handle. Null is allowed.
  */
 void liteparse_raw_text_free(LiteParseRawText *raw_text);
