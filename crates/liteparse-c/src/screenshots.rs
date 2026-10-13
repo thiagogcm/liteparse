@@ -2,6 +2,7 @@ use liteparse::ScreenshotResult;
 use liteparse::types::PageError;
 
 use crate::budget::{bytes_of, check_result_bytes};
+use crate::document::LiteParseRenderRegion;
 use crate::handle::{
     Arenas, LiteParseArenas, array_ptr, free_handle, opaque_handles, packed_len, view_of,
     view_state,
@@ -50,7 +51,9 @@ impl ScreenshotsState {
         let mut arenas = Arenas::default();
         arenas.push_errors(errors);
         let (shots, rects) = pack_screenshots(
-            source.iter().map(|shot| (&shot.source, shot.effective_dpi)),
+            source
+                .iter()
+                .map(|shot| (&shot.source, shot.effective_dpi, shot.area)),
             &mut arenas,
             0,
         )?;
@@ -72,13 +75,13 @@ impl ScreenshotsState {
 }
 
 pub(crate) fn pack_screenshots<'a>(
-    screenshots: impl IntoIterator<Item = (&'a ScreenshotResult, f32)>,
+    screenshots: impl IntoIterator<Item = (&'a ScreenshotResult, f32, LiteParseRenderRegion)>,
     arenas: &mut Arenas,
     arrays: u64,
 ) -> FfiResult<(Vec<LiteParseScreenshot>, Vec<LiteParseScreenshotRect>)> {
     let mut shots = Vec::new();
     let mut rects = Vec::new();
-    for (shot, effective_dpi) in screenshots {
+    for (shot, effective_dpi, area) in screenshots {
         let packed = arrays + bytes_of(&shots) + bytes_of(&rects);
         let png = arenas.push_blob(&shot.image_bytes, packed)?;
         let rect_offset = rects.len();
@@ -89,6 +92,10 @@ pub(crate) fn pack_screenshots<'a>(
             width: shot.width,
             height: shot.height,
             effective_dpi,
+            area_x: area.x,
+            area_y: area.y,
+            area_width: area.width,
+            area_height: area.height,
             rect_offset: packed_len(rect_offset),
             rect_count: packed_len(shot.rects.len()),
             flags: flag_bits(&[(shot.is_solid_fill, LITEPARSE_SCREENSHOT_FLAG_SOLID_FILL)]),

@@ -2069,6 +2069,13 @@ typedef struct {
    * a region render it still describes the page.
    */
   float effective_dpi;
+  /**
+   * Actual pixel-aligned coverage in top-left-origin display points.
+   */
+  float area_x;
+  float area_y;
+  float area_width;
+  float area_height;
   uint32_t rect_offset;
   uint32_t rect_count;
   /**
@@ -2079,7 +2086,7 @@ typedef struct {
 
 /**
  * A solid rectangle or line in top-left-origin 72-DPI viewport space. For a
- * region render the coordinates are relative to the region's origin.
+ * region render the coordinates are relative to the actual covered area's origin.
  */
 typedef struct {
   float x;
