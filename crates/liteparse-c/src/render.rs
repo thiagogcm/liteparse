@@ -305,7 +305,9 @@ fn render_window(
     representable(width, height)?;
     let (width, height) = (width as u32, height as u32);
     let window = region.map_or(Window::whole(width, height), |region| {
-        Window::of(region, scale, width, height)
+        // Regions are already in display points with UserUnit applied;
+        // the whole-page scale above starts from PDFium's unscaled points.
+        Window::of(region, scale / page.user_unit(), width, height)
     });
     Ok((window, width, height))
 }
@@ -637,6 +639,57 @@ mod tests {
         assert_eq!(pixel_span(748.4, 67.4, 1.0, 815), (748, 815));
         assert_eq!(pixel_span(900.0, 10.0, 1.0, 815), (805, 815));
         assert_eq!(pixel_span(0.0, 2000.0, 1.0, 815), (0, 815));
+    }
+
+    #[test]
+    fn display_regions_apply_user_unit_once_under_every_rotation() {
+        use crate::test_pdf::{assemble, stream};
+
+        for (rotation, x, y) in [
+            (0, 50.0, 50.0),
+            (90, 410.0, 50.0),
+            (180, 250.0, 410.0),
+            (270, 50.0, 250.0),
+        ] {
+            let page = format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] \
+                 /CropBox [20 30 180 270] /UserUnit 2 /Rotate {rotation} \
+                 /Resources <<>> /Contents 4 0 R >>"
+            );
+            let content = stream(b"1 0 0 rg 40 230 20 20 re f");
+            let pdf = assemble(&[
+                b"<< /Type /Catalog /Pages 2 0 R >>",
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                page.as_bytes(),
+                &content,
+            ]);
+            let lib = Library::try_init().unwrap();
+            let document = stages::open(&lib, &PdfInput::Bytes(pdf), None, &[]).unwrap();
+            let page = document.page(0).unwrap();
+            for detect_rects in [false, true] {
+                let request = RenderRequest {
+                    dpi: 144.0,
+                    detect_rects,
+                    render_form_fields: false,
+                    region: Some(LiteParseRenderRegion {
+                        x,
+                        y,
+                        width: 20.0,
+                        height: 20.0,
+                    }),
+                };
+                let shot = render_page(&page, None, 1, &request).unwrap();
+                let image = image::load_from_memory(&shot.source.image_bytes)
+                    .unwrap()
+                    .to_rgb8();
+                assert_eq!(image.dimensions(), (40, 40), "rotation {rotation}");
+                assert_eq!(shot.effective_dpi, 144.0);
+                assert!(
+                    image.pixels().all(|pixel| pixel.0 == [255, 0, 0]),
+                    "rotation {rotation}, detect_rects {detect_rects}"
+                );
+            }
+        }
     }
 
     /// Direct region renders place glyphs relative to the region's origin,
