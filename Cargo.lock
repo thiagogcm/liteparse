@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "liteparse-c"
-version = "2.15.1"
+version = "2.16.0"
 dependencies = [
  "image",
  "liteparse",
