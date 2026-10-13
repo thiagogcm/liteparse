@@ -136,6 +136,7 @@ pub(crate) fn map_pages<T>(
 pub(crate) struct RenderedScreenshot {
     pub(crate) source: ScreenshotResult,
     pub(crate) effective_dpi: f32,
+    pub(crate) area: LiteParseRenderRegion,
 }
 
 pub(crate) fn effective_dpi(requested: f32, width: f32, height: f32) -> f32 {
@@ -365,6 +366,21 @@ impl Window {
         }
     }
 
+    fn area(
+        self,
+        page_width: f32,
+        page_height: f32,
+        width: u32,
+        height: u32,
+    ) -> LiteParseRenderRegion {
+        LiteParseRenderRegion {
+            x: (f64::from(self.x) * f64::from(page_width) / f64::from(width)) as f32,
+            y: (f64::from(self.y) * f64::from(page_height) / f64::from(height)) as f32,
+            width: (f64::from(self.width) * f64::from(page_width) / f64::from(width)) as f32,
+            height: (f64::from(self.height) * f64::from(page_height) / f64::from(height)) as f32,
+        }
+    }
+
     fn of(region: LiteParseRenderRegion, scale: f32, width: u32, height: u32) -> Self {
         let (x, right) = pixel_span(region.x, region.width, scale, width);
         let (y, bottom) = pixel_span(region.y, region.height, scale, height);
@@ -437,6 +453,8 @@ fn render_page(
     if let Some(region) = request.region {
         region_fits(region, page_width, page_height)?;
     }
+    let (window, width, height) = render_window(page, request.dpi, request.region)?;
+    let area = window.area(page_width, page_height, width, height);
     // Rectangle detection reads the whole page; otherwise only the region
     // is rasterized.
     let plain_region = request.region.filter(|_| !request.detect_rects);
@@ -462,7 +480,7 @@ fn render_page(
                 let solid = cropped.is_solid_fill();
                 let rects = rects
                     .into_iter()
-                    .filter_map(|rect| clip_rect(rect, region))
+                    .filter_map(|rect| clip_rect(rect, area))
                     .collect();
                 (cropped, rects, solid)
             }
@@ -482,6 +500,7 @@ fn render_page(
             rects,
         },
         effective_dpi: dpi,
+        area,
     })
 }
 
@@ -687,6 +706,45 @@ mod tests {
                 assert!(
                     image.pixels().all(|pixel| pixel.0 == [255, 0, 0]),
                     "rotation {rotation}, detect_rects {detect_rects}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_regions_report_their_actual_pixel_coverage() {
+        use crate::test_pdf::assemble;
+        let pdf = assemble(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 101 80] /Resources <<>> >>",
+        ]);
+        let lib = Library::try_init().unwrap();
+        let document = stages::open(&lib, &PdfInput::Bytes(pdf), None, &[]).unwrap();
+        let page = document.page(0).unwrap();
+        for detect_rects in [false, true] {
+            let request = RenderRequest {
+                dpi: 100.0,
+                detect_rects,
+                render_form_fields: false,
+                region: Some(LiteParseRenderRegion {
+                    x: 95.3,
+                    y: 60.2,
+                    width: 5.7,
+                    height: 10.0,
+                }),
+            };
+            let shot = render_page(&page, None, 1, &request).unwrap();
+            assert_eq!((shot.source.width, shot.source.height), (8, 14));
+            for (actual, expected) in [
+                (shot.area.x, 132.0 * 101.0 / 140.0),
+                (shot.area.y, 84.0 * 80.0 / 111.0),
+                (shot.area.width, 8.0 * 101.0 / 140.0),
+                (shot.area.height, 14.0 * 80.0 / 111.0),
+            ] {
+                assert!(
+                    (actual - expected).abs() < 0.00001,
+                    "{actual} != {expected}"
                 );
             }
         }

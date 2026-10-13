@@ -1444,8 +1444,8 @@ fn screenshots_render_whole_pages_and_cropped_regions() {
     let rects = arr(clipped.view().rects, clipped.view().rects_len);
     for rect in range(rects, shot.rect_offset, shot.rect_count) {
         assert!(rect.x >= 0.0 && rect.y >= 0.0);
-        assert!(rect.x + rect.width <= region.width + 0.01);
-        assert!(rect.y + rect.height <= region.height + 0.01);
+        assert!(rect.x + rect.width <= shot.area_width + 0.01);
+        assert!(rect.y + rect.height <= shot.area_height + 0.01);
     }
     assert_eq!(
         document.screenshot(&[], -3.0, None).unwrap_err(),
@@ -1532,6 +1532,10 @@ fn effective_dpi_reports_the_long_edge_cap_on_both_render_paths() {
     assert_eq!(shots.len(), 1);
     assert_eq!(shots[0].width, 30_000);
     assert_eq!(shots[0].effective_dpi, 300.0);
+    assert_eq!((shots[0].area_x, shots[0].area_y), (0.0, 0.0));
+    assert_eq!((shots[0].area_width, shots[0].area_height), (7_200.0, 72.0));
+    assert_eq!(shots[0].area_width, rendered.shots()[0].area_width);
+    assert_eq!(shots[0].area_height, rendered.shots()[0].area_height);
     assert_ne!(shots[0].flags & LITEPARSE_SCREENSHOT_FLAG_SOLID_FILL, 0);
 }
 

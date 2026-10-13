@@ -4,12 +4,13 @@ use liteparse::{LiteParseConfig as CoreConfig, ParseResult};
 
 use crate::budget::check_result_bytes;
 use crate::content::LiteParseContentArrays;
+use crate::document::LiteParseRenderRegion;
 use crate::handle::{LiteParseStr, array_ptr, free_handle, opaque_handles, view_of, view_state};
 use crate::pack::{Packed, PageParts};
 use crate::records::*;
 use crate::render::effective_dpi;
 use crate::screenshots::pack_screenshots;
-use crate::status::FfiResult;
+use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_PARSE_ERROR};
 
 /// A parse or extract result. Views borrow from it until it is freed.
 pub struct LiteParseResult {
@@ -186,16 +187,33 @@ impl ResultState {
         packed.pack_sidecars(&result.images, &result.outline, &result.page_errors)?;
         let form_flags = forms.pack(&mut packed);
         let requested_dpi = config.dpi;
-        let screenshots_with_dpi = result.screenshots.iter().map(|shot| {
-            let dpi = result
-                .pages
-                .iter()
-                .find(|page| page.page_number == shot.page_num as usize)
-                .map_or(requested_dpi, |page| {
-                    effective_dpi(requested_dpi, page.page_width, page.page_height)
-                });
-            (shot, dpi)
-        });
+        let screenshots_with_dpi = result
+            .screenshots
+            .iter()
+            .map(|shot| {
+                let page = result
+                    .pages
+                    .iter()
+                    .find(|page| page.page_number == shot.page_num as usize)
+                    .ok_or_else(|| {
+                        FfiError::new(
+                            LITEPARSE_STATUS_PARSE_ERROR,
+                            "screenshot has no corresponding page geometry",
+                        )
+                    })?;
+                let dpi = effective_dpi(requested_dpi, page.page_width, page.page_height);
+                Ok((
+                    shot,
+                    dpi,
+                    LiteParseRenderRegion {
+                        x: 0.0,
+                        y: 0.0,
+                        width: page.page_width,
+                        height: page.page_height,
+                    },
+                ))
+            })
+            .collect::<FfiResult<Vec<_>>>()?;
         let arrays = packed.array_bytes();
         (packed.screenshots, packed.screenshot_rects) =
             pack_screenshots(screenshots_with_dpi, &mut packed.arenas, arrays)?;

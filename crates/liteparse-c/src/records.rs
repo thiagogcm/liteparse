@@ -661,6 +661,11 @@ pub struct LiteParseScreenshot {
     /// the renderer lowered it to keep the long edge under 30,000 pixels. For
     /// a region render it still describes the page.
     pub effective_dpi: f32,
+    /// Actual pixel-aligned coverage in top-left-origin display points.
+    pub area_x: f32,
+    pub area_y: f32,
+    pub area_width: f32,
+    pub area_height: f32,
     pub rect_offset: u32,
     pub rect_count: u32,
     /// `LITEPARSE_SCREENSHOT_FLAG_*` bits.
@@ -668,7 +673,7 @@ pub struct LiteParseScreenshot {
 }
 
 /// A solid rectangle or line in top-left-origin 72-DPI viewport space. For a
-/// region render the coordinates are relative to the region's origin.
+/// region render the coordinates are relative to the actual covered area's origin.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LiteParseScreenshotRect {
