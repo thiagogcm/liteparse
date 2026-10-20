@@ -25,6 +25,8 @@ use crate::render::{RenderRequest, render_pages};
 use crate::result::{LiteParseResult, ResultState};
 use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
+use crate::stated::PageTreeFacts;
+use crate::stated_metadata::{self, LiteParseStatedMetadata, StatedMetadataState};
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
 /// Page region in top-left-origin viewport points. Must fit within the page.
@@ -111,6 +113,10 @@ pub(crate) struct Source {
     /// Held while the signals are computed, so one caller reads the
     /// document for them and the others wait for what it found.
     signals_pass: Mutex<()>,
+    /// What the page tree states beyond PDFium's reach, by page, read by the
+    /// first call that needs them; `None` when the file's objects cannot be
+    /// read.
+    pub(crate) page_tree_facts: OnceLock<Option<Vec<PageTreeFacts>>>,
 }
 
 /// The source file's metadata. Borrowed until the document is freed.
@@ -165,6 +171,7 @@ impl Source {
             repaired: OnceLock::new(),
             signals: OnceLock::new(),
             signals_pass: Mutex::new(()),
+            page_tree_facts: OnceLock::new(),
         })
     }
 
@@ -289,6 +296,8 @@ pub(crate) struct DocumentState {
     info: LiteParseDocumentInfo,
     /// The source file's metadata, read by the first call that asks for it.
     metadata: OnceLock<MetadataState>,
+    /// What the file states about itself, read by the first call that asks.
+    stated_metadata: OnceLock<StatedMetadataState>,
 }
 
 view_state!(DocumentState => LiteParseDocumentInfo, info);
@@ -352,6 +361,7 @@ impl DocumentState {
             outline_entries,
             info,
             metadata: OnceLock::new(),
+            stated_metadata: OnceLock::new(),
         })
     }
 
@@ -386,6 +396,21 @@ impl DocumentState {
             let _ = self.metadata.set(MetadataState { pool, view });
         }
         Ok(&self.metadata.get().expect("set above").view)
+    }
+
+    /// The `/Info` entries and XMP packet the file states, read once under the
+    /// PDFium lock like [`Self::metadata`].
+    pub(crate) fn stated_metadata(&self) -> FfiResult<&LiteParseStatedMetadata> {
+        if let Some(state) = self.stated_metadata.get() {
+            return Ok(&state.view);
+        }
+        let lib = Library::try_init()?;
+        if self.stated_metadata.get().is_none() {
+            let _ = self
+                .stated_metadata
+                .set(stated_metadata::read(&self.source, &lib)?);
+        }
+        Ok(&self.stated_metadata.get().expect("set above").view)
     }
 
     pub(crate) fn source(&self) -> Arc<Source> {

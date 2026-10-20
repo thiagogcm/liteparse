@@ -25,6 +25,11 @@ use crate::render::{
 };
 use crate::result::LiteParseResultView;
 use crate::screenshots::LiteParseScreenshotsView;
+use crate::stated::{
+    LiteParseStatedAnnotation, LiteParseStatedElement, LiteParseStatedPage,
+    LiteParseStatedPagesView, LiteParseUserQuad, LiteParseUserRect,
+};
+use crate::stated_metadata::{LiteParseInfoEntry, LiteParseStatedMetadata};
 use crate::{LiteParseComplexityView, LiteParsePageComplexity};
 
 /// FNV-1a over the generated header with `\r` removed, so every checkout
@@ -231,6 +236,23 @@ pub const LITEPARSE_TYPE_CLIP_PATH: u32 = 57;
 /// `liteparse_sizeof` selector for `LiteParseDocumentMetadata`.
 pub const LITEPARSE_TYPE_DOCUMENT_METADATA: u32 = 58;
 
+/// `liteparse_sizeof` selector for `LiteParseUserRect`.
+pub const LITEPARSE_TYPE_USER_RECT: u32 = 59;
+/// `liteparse_sizeof` selector for `LiteParseUserQuad`.
+pub const LITEPARSE_TYPE_USER_QUAD: u32 = 60;
+/// `liteparse_sizeof` selector for `LiteParseStatedAnnotation`.
+pub const LITEPARSE_TYPE_STATED_ANNOTATION: u32 = 61;
+/// `liteparse_sizeof` selector for `LiteParseStatedElement`.
+pub const LITEPARSE_TYPE_STATED_ELEMENT: u32 = 62;
+/// `liteparse_sizeof` selector for `LiteParseStatedPage`.
+pub const LITEPARSE_TYPE_STATED_PAGE: u32 = 63;
+/// `liteparse_sizeof` selector for `LiteParseStatedPagesView`.
+pub const LITEPARSE_TYPE_STATED_PAGES_VIEW: u32 = 64;
+/// `liteparse_sizeof` selector for `LiteParseInfoEntry`.
+pub const LITEPARSE_TYPE_INFO_ENTRY: u32 = 65;
+/// `liteparse_sizeof` selector for `LiteParseStatedMetadata`.
+pub const LITEPARSE_TYPE_STATED_METADATA: u32 = 66;
+
 /// `sizeof` the struct a `LITEPARSE_TYPE_*` selector names, or zero for an
 /// unknown selector. Lets a binding that declares layouts by hand assert
 /// them against the library it loaded.
@@ -298,6 +320,14 @@ pub extern "C" fn liteparse_sizeof(type_id: u32) -> usize {
         LITEPARSE_TYPE_RAW_TEXT_PAGE => size_of::<LiteParseRawTextPage>(),
         LITEPARSE_TYPE_RAW_TEXT_ITEM => size_of::<LiteParseRawTextItem>(),
         LITEPARSE_TYPE_RAW_TEXT_VIEW => size_of::<LiteParseRawTextView>(),
+        LITEPARSE_TYPE_USER_RECT => size_of::<LiteParseUserRect>(),
+        LITEPARSE_TYPE_USER_QUAD => size_of::<LiteParseUserQuad>(),
+        LITEPARSE_TYPE_STATED_ANNOTATION => size_of::<LiteParseStatedAnnotation>(),
+        LITEPARSE_TYPE_STATED_ELEMENT => size_of::<LiteParseStatedElement>(),
+        LITEPARSE_TYPE_STATED_PAGE => size_of::<LiteParseStatedPage>(),
+        LITEPARSE_TYPE_STATED_PAGES_VIEW => size_of::<LiteParseStatedPagesView>(),
+        LITEPARSE_TYPE_INFO_ENTRY => size_of::<LiteParseInfoEntry>(),
+        LITEPARSE_TYPE_STATED_METADATA => size_of::<LiteParseStatedMetadata>(),
         _ => 0,
     }
 }
@@ -363,6 +393,14 @@ const ABI_TYPE_IDS: &[u32] = &[
     LITEPARSE_TYPE_PAGE_OUTPUT,
     LITEPARSE_TYPE_BLOB_REF,
     LITEPARSE_TYPE_ABI_DESCRIPTOR,
+    LITEPARSE_TYPE_USER_RECT,
+    LITEPARSE_TYPE_USER_QUAD,
+    LITEPARSE_TYPE_STATED_ANNOTATION,
+    LITEPARSE_TYPE_STATED_ELEMENT,
+    LITEPARSE_TYPE_STATED_PAGE,
+    LITEPARSE_TYPE_STATED_PAGES_VIEW,
+    LITEPARSE_TYPE_INFO_ENTRY,
+    LITEPARSE_TYPE_STATED_METADATA,
 ];
 
 #[cfg(test)]
