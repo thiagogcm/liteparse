@@ -307,6 +307,46 @@
 #define LITEPARSE_TYPE_DOCUMENT_METADATA 58
 
 /**
+ * `liteparse_sizeof` selector for `LiteParseUserRect`.
+ */
+#define LITEPARSE_TYPE_USER_RECT 59
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseUserQuad`.
+ */
+#define LITEPARSE_TYPE_USER_QUAD 60
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedAnnotation`.
+ */
+#define LITEPARSE_TYPE_STATED_ANNOTATION 61
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedElement`.
+ */
+#define LITEPARSE_TYPE_STATED_ELEMENT 62
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedPage`.
+ */
+#define LITEPARSE_TYPE_STATED_PAGE 63
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedPagesView`.
+ */
+#define LITEPARSE_TYPE_STATED_PAGES_VIEW 64
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseInfoEntry`.
+ */
+#define LITEPARSE_TYPE_INFO_ENTRY 65
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedMetadata`.
+ */
+#define LITEPARSE_TYPE_STATED_METADATA 66
+
+/**
  * Maximum sum of flat input array bytes accepted from caller-supplied content.
  */
 #define LITEPARSE_MAX_CONTENT_INPUT_BYTES ((256 * 1024) * 1024)
@@ -960,6 +1000,109 @@
 #define LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM (1 << 5)
 
 /**
+ * `LiteParseStatedPage.flags` bit: the page states, or inherits, a media box.
+ * A page that does not has no usable size; PDFium itself falls back to letter.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_MEDIA_BOX (1 << 0)
+
+/**
+ * Flag: a crop box is stated or inherited.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_CROP_BOX (1 << 1)
+
+/**
+ * Flag: the page dictionary states a bleed box.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_BLEED_BOX (1 << 2)
+
+/**
+ * Flag: the page dictionary states a trim box.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_TRIM_BOX (1 << 3)
+
+/**
+ * Flag: the page dictionary states an art box.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_ART_BOX (1 << 4)
+
+/**
+ * `LiteParseStatedAnnotation.flags` bit: PDFium reported the annotation's
+ * `/Rect`.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_HAS_RECT (1 << 0)
+
+/**
+ * Flag: the annotation states `/F`; `pdf_flags` holds it.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS (1 << 1)
+
+/**
+ * Flag: the annotation states `/C`.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_STATED (1 << 2)
+
+/**
+ * Flag: `colour_count` and the first `colour_count` of `colour` hold the stated
+ * `/C`. Clear while `COLOUR_STATED` is set when the value could not be read.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ (1 << 3)
+
+/**
+ * Flag: the colour components are the array as the file writes it. Clear
+ * when the file's objects could not be read and PDFium supplied the colour:
+ * three components, `0` to `1` in 8-bit steps, as PDFium converts them.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT (1 << 4)
+
+/**
+ * `LiteParseInfoEntry.kind`: a text string.
+ */
+#define LITEPARSE_INFO_KIND_TEXT 0
+
+/**
+ * A name; the value is the name without its slash.
+ */
+#define LITEPARSE_INFO_KIND_NAME 1
+
+/**
+ * An integer or a real number; the value is its decimal text.
+ */
+#define LITEPARSE_INFO_KIND_NUMBER 2
+
+/**
+ * A boolean; the value is `true` or `false`.
+ */
+#define LITEPARSE_INFO_KIND_BOOLEAN 3
+
+/**
+ * Anything else (null, array, dictionary); the value is its PDF syntax.
+ */
+#define LITEPARSE_INFO_KIND_OTHER 4
+
+/**
+ * `LiteParseStatedMetadata.flags` bit: the trailer states an information
+ * dictionary (it may be empty).
+ */
+#define LITEPARSE_STATED_METADATA_FLAG_HAS_INFO (1 << 0)
+
+/**
+ * Flag: the catalog states an XMP stream and `xmp` holds it.
+ */
+#define LITEPARSE_STATED_METADATA_FLAG_HAS_XMP (1 << 1)
+
+/**
+ * Flag: the catalog states an XMP stream this library cannot decode (an
+ * unsupported filter); `xmp` is empty.
+ */
+#define LITEPARSE_STATED_METADATA_FLAG_XMP_UNREADABLE (1 << 2)
+
+/**
+ * Flag: the file's objects could not be read, so `entries` holds only the
+ * standard keys PDFium returned and `xmp` is empty.
+ */
+#define LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL (1 << 3)
+
+/**
  * Per-page complexity signals. Views borrow from the handle.
  */
 typedef struct LiteParseComplexity LiteParseComplexity;
@@ -1001,6 +1144,11 @@ typedef struct LiteParseResult LiteParseResult;
  * Rendered pages. Views borrow from the handle until it is freed.
  */
 typedef struct LiteParseScreenshots LiteParseScreenshots;
+
+/**
+ * Pages stated by the document. Views borrow from the handle.
+ */
+typedef struct LiteParseStatedPages LiteParseStatedPages;
 
 /**
  * Runtime layout and compiled-feature descriptor. `layout_fingerprint`
@@ -2248,6 +2396,206 @@ typedef struct {
 } LiteParseScreenshotsView;
 
 /**
+ * A rectangle in PDF user space: normalised, `x0 <= x1` and `y0 <= y1`.
+ */
+typedef struct {
+  float x0;
+  float y0;
+  float x1;
+  float y1;
+} LiteParseUserRect;
+
+/**
+ * One page. `annotation_*` range into the view's `annotations`, `element_*`
+ * into its `elements`.
+ */
+typedef struct {
+  LiteParseUserRect media_box;
+  LiteParseUserRect crop_box;
+  LiteParseUserRect bleed_box;
+  LiteParseUserRect trim_box;
+  LiteParseUserRect art_box;
+  /**
+   * `/UserUnit`, `1` when the page states none.
+   */
+  float user_unit;
+  uint32_t page_number;
+  /**
+   * `LITEPARSE_STATED_PAGE_FLAG_*` bits.
+   */
+  uint32_t flags;
+  uint32_t annotation_offset;
+  uint32_t annotation_count;
+  uint32_t element_offset;
+  uint32_t element_count;
+} LiteParseStatedPage;
+
+/**
+ * One annotation of a page's `/Annots` array. Strings index the view's pool;
+ * an absent string and an empty one are both `len == 0`. `quad_offset` and
+ * `quad_count` range into the view's `quads`.
+ */
+typedef struct {
+  /**
+   * The `/Subtype` name as stated, without the slash.
+   */
+  LiteParseStr subtype;
+  LiteParseStr contents;
+  /**
+   * `/T`.
+   */
+  LiteParseStr author;
+  /**
+   * `/NM`.
+   */
+  LiteParseStr name;
+  /**
+   * `/M` as written, not parsed.
+   */
+  LiteParseStr modified;
+  /**
+   * `/CreationDate` as written, not parsed.
+   */
+  LiteParseStr created;
+  /**
+   * A link's URI action.
+   */
+  LiteParseStr uri;
+  LiteParseUserRect rect;
+  uint32_t quad_offset;
+  uint32_t quad_count;
+  /**
+   * `/F`, meaningful when `HAS_PDF_FLAGS` is set.
+   */
+  uint32_t pdf_flags;
+  /**
+   * The 1-based page a link jumps to within this document, `0` when it
+   * jumps nowhere or somewhere PDFium cannot resolve to a page.
+   */
+  uint32_t target_page;
+  /**
+   * How many of `colour` are meaningful: `0`, `1`, `3` or `4`, when
+   * `COLOUR_READ` is set.
+   */
+  uint32_t colour_count;
+  /**
+   * `/C` components, in the order the array holds them.
+   */
+  float colour[4];
+  /**
+   * `LITEPARSE_STATED_ANNOTATION_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseStatedAnnotation;
+
+/**
+ * The four corners of one `/QuadPoints` entry in PDF user space, in the order
+ * the array states them.
+ */
+typedef struct {
+  float x1;
+  float y1;
+  float x2;
+  float y2;
+  float x3;
+  float y3;
+  float x4;
+  float y4;
+} LiteParseUserQuad;
+
+/**
+ * One structure element of a page's tree. Strings index the view's pool;
+ * `mcid_offset` and `mcid_count` range into the view's `mcids`.
+ */
+typedef struct {
+  /**
+   * The element's type as PDFium reports it: `/S` after the structure
+   * tree's `/RoleMap`, so a type the map sends to a standard type reads as
+   * that type. The element's own `/S` is not available.
+   */
+  LiteParseStr element_type;
+  /**
+   * `/ID`.
+   */
+  LiteParseStr id;
+  /**
+   * `/Lang` of this element alone, never inherited.
+   */
+  LiteParseStr lang;
+  /**
+   * `/Alt`.
+   */
+  LiteParseStr alt_text;
+  /**
+   * `/ActualText`.
+   */
+  LiteParseStr actual_text;
+  /**
+   * The 1-based position in this page's elements of the parent, `0` for a
+   * top element.
+   */
+  uint32_t parent;
+  uint32_t mcid_offset;
+  uint32_t mcid_count;
+} LiteParseStatedElement;
+
+/**
+ * What a stated-pages handle borrows. The pool is `arenas.pool`.
+ */
+typedef struct {
+  LiteParseArenas arenas;
+  const LiteParseStatedPage *pages;
+  size_t pages_len;
+  const LiteParseStatedAnnotation *annotations;
+  size_t annotations_len;
+  const LiteParseUserQuad *quads;
+  size_t quads_len;
+  const LiteParseStatedElement *elements;
+  size_t elements_len;
+  const int32_t *mcids;
+  size_t mcids_len;
+} LiteParseStatedPagesView;
+
+/**
+ * One `/Info` entry. Strings index the metadata's pool.
+ */
+typedef struct {
+  /**
+   * The key without its slash.
+   */
+  LiteParseStr key;
+  LiteParseStr value;
+  /**
+   * `LITEPARSE_INFO_KIND_*`.
+   */
+  uint32_t kind;
+} LiteParseInfoEntry;
+
+/**
+ * What the file states about itself: the information dictionary in file
+ * order and the XMP packet. Borrowed until the document is freed. Every field
+ * is absent for an input that was converted to PDF.
+ */
+typedef struct {
+  /**
+   * String pool behind `entries` and `xmp`.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
+  const LiteParseInfoEntry *entries;
+  size_t entries_len;
+  /**
+   * The XMP packet as text, decoded by its encoding (UTF-8, or UTF-16 by
+   * byte order mark or by the first bytes), byte order mark dropped.
+   */
+  LiteParseStr xmp;
+  /**
+   * `LITEPARSE_STATED_METADATA_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseStatedMetadata;
+
+/**
  * The operation succeeded.
  */
 #define LITEPARSE_STATUS_OK 0
@@ -2691,6 +3039,54 @@ void liteparse_screenshots_free(LiteParseScreenshots *screenshots);
  * `screenshots` must be null or live.
  */
 const LiteParseScreenshotsView *liteparse_screenshots_view(const LiteParseScreenshots *screenshots);
+
+/**
+ * Read what the document states about 1-based pages, in PDF user space: page
+ * boxes, annotations and structure elements (see [`LiteParseStatedPagesView`]).
+ * Null `pages` with zero length selects all; a selection is validated against
+ * the page count, de-duplicated and read in ascending order, and
+ * `max_pages` caps either form.
+ *
+ * The media and crop boxes a page inherits and the exact `/C` arrays of its
+ * annotations come from the file's own objects, which the first call on a
+ * document loads whole: on a file with many objects that costs more than a
+ * parse, and the document keeps what it found. When those objects cannot be
+ * read, a page states the boxes its own dictionary holds and PDFium's
+ * conversion of a colour (`COLOUR_EXACT` clear).
+ *
+ * `document` must be live, `pages` readable or null with zero length, and
+ * `out` writable.
+ */
+LiteParseStatus liteparse_document_stated_pages(const LiteParseDocument *document,
+                                                const uint32_t *pages,
+                                                size_t pages_len,
+                                                LiteParseStatedPages **out);
+
+/**
+ * Destroy a stated-pages handle. Null is allowed.
+ */
+void liteparse_stated_pages_free(LiteParseStatedPages *stated_pages);
+
+/**
+ * Borrow the stated pages; null for a null handle.
+ *
+ * `stated_pages` must be null or live.
+ */
+const LiteParseStatedPagesView *liteparse_stated_pages_view(const LiteParseStatedPages *stated_pages);
+
+/**
+ * Borrow what the file states about itself: every `/Info` entry with its kind
+ * of value, and the whole XMP packet (see [`LiteParseStatedMetadata`]). The
+ * first call on a document reads and the document keeps it; the view is valid
+ * until the document is freed. The read loads every object of the file, so it
+ * can take seconds on a file with many; it is separate from
+ * `liteparse_document_metadata`, which stays cheap.
+ *
+ * `document` must be live and `out` writable; `out` receives null on
+ * failure.
+ */
+LiteParseStatus liteparse_document_stated_metadata(const LiteParseDocument *document,
+                                                   const LiteParseStatedMetadata **out);
 
 /**
  * Borrow this thread's most recent failure message into `out`. The view

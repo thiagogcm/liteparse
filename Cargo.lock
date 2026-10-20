@@ -2064,8 +2064,11 @@ name = "liteparse-c"
 version = "2.16.0"
 dependencies = [
  "image",
+ "libc",
+ "libloading",
  "liteparse",
  "liteparse-pdfium",
+ "lopdf",
  "serde_json",
  "tokio",
 ]
