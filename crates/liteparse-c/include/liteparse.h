@@ -1026,6 +1026,13 @@
 #define LITEPARSE_STATED_PAGE_FLAG_ART_BOX (1 << 4)
 
 /**
+ * Flag: the catalog names a structure tree that PDFium does not read, because
+ * the catalog does not mark the document tagged (`/MarkInfo /Marked true`).
+ * The page then states no structure elements, whatever the tree holds.
+ */
+#define LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD (1 << 5)
+
+/**
  * `LiteParseStatedAnnotation.flags` bit: PDFium reported the annotation's
  * `/Rect`.
  */
@@ -3054,7 +3061,8 @@ const LiteParseScreenshotsView *liteparse_screenshots_view(const LiteParseScreen
  * document loads whole: on a file with many objects that costs more than a
  * parse, and the document keeps what it found. When those objects cannot be
  * read, a page states the boxes its own dictionary holds and PDFium's
- * conversion of a colour (`COLOUR_EXACT` clear).
+ * conversion of a colour (`COLOUR_EXACT` clear), and no page sets
+ * `STRUCTURE_UNREAD`.
  *
  * `document` must be live, `pages` readable or null with zero length, and
  * `out` writable.

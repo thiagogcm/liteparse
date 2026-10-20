@@ -530,6 +530,11 @@ fn colour_is_the_array_as_the_file_writes_it() {
 // ---- structure ------------------------------------------------------------------------------
 
 fn structure_pdf() -> Vec<u8> {
+    structure_pdf_marked("true")
+}
+
+/// The structure document with `/MarkInfo /Marked` set to `marked`.
+fn structure_pdf_marked(marked: &str) -> Vec<u8> {
     let content = stream(
         "",
         b"BT /F1 12 Tf 72 700 Td /Para << /MCID 0 >> BDC (Hello) Tj EMC ET \
@@ -540,9 +545,11 @@ fn structure_pdf() -> Vec<u8> {
         b"BT /F1 12 Tf 72 700 Td /P << /MCID 0 >> BDC (Elsewhere) Tj EMC ET",
     );
     assemble(&[
-        b"<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> \
-          /StructTreeRoot 6 0 R /Lang (en) >>"
-            .to_vec(),
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked {marked} >> \
+             /StructTreeRoot 6 0 R /Lang (en) >>"
+        )
+        .into_bytes(),
         b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R \
           /Resources << /Font << /F1 7 0 R >> >> /StructParents 0 >>"
@@ -622,6 +629,25 @@ fn structure_language_id_and_text_are_the_elements_own() {
     assert_eq!(elements[2].lang, None);
     assert_eq!(elements[2].actual.as_deref(), Some("Second"));
     assert_eq!(elements[2].alt, None);
+}
+
+#[test]
+fn a_tree_pdfium_reads_is_not_flagged_unread() {
+    let (_parser, document) = open(&structure_pdf());
+    let stated = document.stated(&[]);
+    for page in stated.pages() {
+        assert_eq!(page.flags & LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD, 0);
+    }
+}
+
+#[test]
+fn a_tree_in_a_document_not_marked_tagged_is_flagged_unread() {
+    let (_parser, document) = open(&structure_pdf_marked("false"));
+    let stated = document.stated(&[]);
+    for (index, page) in stated.pages().iter().enumerate() {
+        assert_ne!(page.flags & LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD, 0);
+        assert!(stated.elements(index).is_empty());
+    }
 }
 
 #[test]
