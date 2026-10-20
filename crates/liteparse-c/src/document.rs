@@ -25,7 +25,7 @@ use crate::render::{RenderRequest, render_pages};
 use crate::result::{LiteParseResult, ResultState};
 use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
-use crate::stated::PageTreeFacts;
+use crate::stated::FileFacts;
 use crate::stated_metadata::{self, LiteParseStatedMetadata, StatedMetadataState};
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
@@ -113,10 +113,9 @@ pub(crate) struct Source {
     /// Held while the signals are computed, so one caller reads the
     /// document for them and the others wait for what it found.
     signals_pass: Mutex<()>,
-    /// What the page tree states beyond PDFium's reach, by page, read by the
-    /// first call that needs them; `None` when the file's objects cannot be
-    /// read.
-    pub(crate) page_tree_facts: OnceLock<Option<Vec<PageTreeFacts>>>,
+    /// What the file's objects state beyond PDFium's reach, read by the first
+    /// call that needs them; `None` when the file's objects cannot be read.
+    pub(crate) file_facts: OnceLock<Option<FileFacts>>,
 }
 
 /// The source file's metadata. Borrowed until the document is freed.
@@ -171,7 +170,7 @@ impl Source {
             repaired: OnceLock::new(),
             signals: OnceLock::new(),
             signals_pass: Mutex::new(()),
-            page_tree_facts: OnceLock::new(),
+            file_facts: OnceLock::new(),
         })
     }
 
