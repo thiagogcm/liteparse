@@ -477,8 +477,10 @@ pub unsafe extern "C" fn liteparse_document_open_path(
     }
 }
 
-/// Open and copy in-memory input. Prefer paths for large documents: bytes
-/// are copied at open and again per parse.
+/// Open in-memory input. The bytes are copied once, here, and every later
+/// operation reads that copy; the caller's buffer is not kept. PDFium loads a
+/// document from memory with a 32-bit length, so input of 2 GiB or more is
+/// `LITEPARSE_STATUS_RESOURCE_LIMIT`: open it by path.
 ///
 /// `parser` must be live; `data` must be readable, or null with zero
 /// length; `out` must be writable.
@@ -492,6 +494,12 @@ pub unsafe extern "C" fn liteparse_document_open_bytes(
     unsafe {
         create_handle(out, || {
             let parser = state_ref(parser)?;
+            if i32::try_from(data_len).is_err() {
+                return Err(FfiError::resource_limit(format!(
+                    "in-memory input of {data_len} bytes exceeds the 2 GiB PDFium loads from \
+                     memory; open it by path"
+                )));
+            }
             let bytes = as_slice(data, data_len, "data")?
                 .unwrap_or_default()
                 .to_vec();
