@@ -2733,8 +2733,10 @@ LiteParseStatus liteparse_document_open_path(const LiteParseParser *parser,
                                              LiteParseDocument **out);
 
 /**
- * Open and copy in-memory input. Prefer paths for large documents: bytes
- * are copied at open and again per parse.
+ * Open in-memory input. The bytes are copied once, here, and every later
+ * operation reads that copy; the caller's buffer is not kept. PDFium loads a
+ * document from memory with a 32-bit length, so input of 2 GiB or more is
+ * `LITEPARSE_STATUS_RESOURCE_LIMIT`: open it by path.
  *
  * `parser` must be live; `data` must be readable, or null with zero
  * length; `out` must be writable.

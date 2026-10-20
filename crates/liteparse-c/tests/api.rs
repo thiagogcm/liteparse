@@ -1328,6 +1328,20 @@ fn open_bytes_matches_open_path() {
 }
 
 #[test]
+fn in_memory_input_past_pdfiums_32_bit_length_is_refused_before_it_is_read() {
+    let parser = Parser::plain();
+    let byte = 0u8;
+    // The length is the only thing read: the refusal comes before any byte is.
+    let length = i32::MAX as usize + 1;
+    let refused = call(
+        |out| unsafe { liteparse_document_open_bytes(parser.0, &byte, length, out) },
+        Document,
+    );
+    assert_eq!(refused.err(), Some(LITEPARSE_STATUS_RESOURCE_LIMIT));
+    last_error_contains("open it by path");
+}
+
+#[test]
 fn result_view_is_self_consistent() {
     let parser = Parser::new(|c| {
         c.options |= LITEPARSE_FLAG_EXTRACT_TEXT_METADATA
