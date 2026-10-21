@@ -1049,6 +1049,21 @@
 #define LITEPARSE_STATED_ANNOTATION_FLAG_HAS_RECT (1 << 0)
 
 /**
+ * `LiteParseStatedElement.flags` bit: `bbox` holds the element's `/BBox`.
+ */
+#define LITEPARSE_STATED_ELEMENT_FLAG_BBOX (1 << 0)
+
+/**
+ * Flag: `row_span` holds the element's `/RowSpan`.
+ */
+#define LITEPARSE_STATED_ELEMENT_FLAG_ROW_SPAN (1 << 1)
+
+/**
+ * Flag: `col_span` holds the element's `/ColSpan`.
+ */
+#define LITEPARSE_STATED_ELEMENT_FLAG_COL_SPAN (1 << 2)
+
+/**
  * Flag: the annotation states `/F`; `pdf_flags` holds it.
  */
 #define LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS (1 << 1)
@@ -2515,6 +2530,11 @@ typedef struct {
    * `LITEPARSE_STATED_ANNOTATION_FLAG_*` bits.
    */
   uint32_t flags;
+  /**
+   * The annotation dictionary's object number, `0` for a direct
+   * dictionary; a structure element's object reference names it.
+   */
+  uint32_t object_number;
 } LiteParseStatedAnnotation;
 
 /**
@@ -2566,6 +2586,40 @@ typedef struct {
   uint32_t parent;
   uint32_t mcid_offset;
   uint32_t mcid_count;
+  /**
+   * The standard attributes of the element's `/A` that a reading of
+   * lists, figures and tables uses, each as written and empty when the
+   * element states none: `/ListNumbering`, `/Placement`, `/Scope` and
+   * `/Summary`.
+   */
+  LiteParseStr list_numbering;
+  LiteParseStr placement;
+  LiteParseStr scope;
+  LiteParseStr summary;
+  /**
+   * `/BBox` in PDF user space, when `FLAG_BBOX` is set.
+   */
+  LiteParseUserRect bbox;
+  /**
+   * `/RowSpan` and `/ColSpan`, when their flags are set.
+   */
+  uint32_t row_span;
+  uint32_t col_span;
+  /**
+   * Range into the view's `headers`: the ids `/Headers` names.
+   */
+  uint32_t header_offset;
+  uint32_t header_count;
+  /**
+   * Range into the view's `objects`: the object numbers the element's
+   * object references name, such as a link element's annotation.
+   */
+  uint32_t object_offset;
+  uint32_t object_count;
+  /**
+   * `LITEPARSE_STATED_ELEMENT_FLAG_*` bits.
+   */
+  uint32_t flags;
 } LiteParseStatedElement;
 
 /**
@@ -2583,6 +2637,16 @@ typedef struct {
   size_t elements_len;
   const int32_t *mcids;
   size_t mcids_len;
+  /**
+   * The ids the elements' `/Headers` name, in element order.
+   */
+  const LiteParseStr *headers;
+  size_t headers_len;
+  /**
+   * The object numbers the elements' object references name.
+   */
+  const int32_t *objects;
+  size_t objects_len;
 } LiteParseStatedPagesView;
 
 /**
