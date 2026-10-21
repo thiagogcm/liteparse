@@ -24,7 +24,7 @@
 //! not mark it tagged (`/MarkInfo /Marked true`); a page of a document that
 //! has a tree all the same says so ([`LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD`]).
 
-use std::ffi::{c_int, c_ulong, c_void};
+use std::ffi::{CStr, c_int, c_ulong, c_void};
 
 use liteparse::types::{PageError, PdfInput};
 use liteparse_pdfium::{Library, pdfium_sys};
@@ -63,6 +63,12 @@ pub const LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD: u32 = 1 << 5;
 /// `LiteParseStatedAnnotation.flags` bit: PDFium reported the annotation's
 /// `/Rect`.
 pub const LITEPARSE_STATED_ANNOTATION_FLAG_HAS_RECT: u32 = 1 << 0;
+/// `LiteParseStatedElement.flags` bit: `bbox` holds the element's `/BBox`.
+pub const LITEPARSE_STATED_ELEMENT_FLAG_BBOX: u32 = 1 << 0;
+/// Flag: `row_span` holds the element's `/RowSpan`.
+pub const LITEPARSE_STATED_ELEMENT_FLAG_ROW_SPAN: u32 = 1 << 1;
+/// Flag: `col_span` holds the element's `/ColSpan`.
+pub const LITEPARSE_STATED_ELEMENT_FLAG_COL_SPAN: u32 = 1 << 2;
 /// Flag: the annotation states `/F`; `pdf_flags` holds it.
 pub const LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS: u32 = 1 << 1;
 /// Flag: the annotation states `/C`.
@@ -134,6 +140,9 @@ pub struct LiteParseStatedAnnotation {
     pub colour: [f32; 4],
     /// `LITEPARSE_STATED_ANNOTATION_FLAG_*` bits.
     pub flags: u32,
+    /// The annotation dictionary's object number, `0` for a direct
+    /// dictionary; a structure element's object reference names it.
+    pub object_number: u32,
 }
 
 /// One structure element of a page's tree. Strings index the view's pool;
@@ -158,6 +167,28 @@ pub struct LiteParseStatedElement {
     pub parent: u32,
     pub mcid_offset: u32,
     pub mcid_count: u32,
+    /// The standard attributes of the element's `/A` that a reading of
+    /// lists, figures and tables uses, each as written and empty when the
+    /// element states none: `/ListNumbering`, `/Placement`, `/Scope` and
+    /// `/Summary`.
+    pub list_numbering: LiteParseStr,
+    pub placement: LiteParseStr,
+    pub scope: LiteParseStr,
+    pub summary: LiteParseStr,
+    /// `/BBox` in PDF user space, when `FLAG_BBOX` is set.
+    pub bbox: LiteParseUserRect,
+    /// `/RowSpan` and `/ColSpan`, when their flags are set.
+    pub row_span: u32,
+    pub col_span: u32,
+    /// Range into the view's `headers`: the ids `/Headers` names.
+    pub header_offset: u32,
+    pub header_count: u32,
+    /// Range into the view's `objects`: the object numbers the element's
+    /// object references name, such as a link element's annotation.
+    pub object_offset: u32,
+    pub object_count: u32,
+    /// `LITEPARSE_STATED_ELEMENT_FLAG_*` bits.
+    pub flags: u32,
 }
 
 /// One page. `annotation_*` range into the view's `annotations`, `element_*`
@@ -205,6 +236,12 @@ pub struct LiteParseStatedPagesView {
     pub elements_len: usize,
     pub mcids: *const i32,
     pub mcids_len: usize,
+    /// The ids the elements' `/Headers` name, in element order.
+    pub headers: *const LiteParseStr,
+    pub headers_len: usize,
+    /// The object numbers the elements' object references name.
+    pub objects: *const i32,
+    pub objects_len: usize,
 }
 
 #[derive(Default)]
@@ -215,6 +252,8 @@ struct Packer {
     quads: Vec<LiteParseUserQuad>,
     elements: Vec<LiteParseStatedElement>,
     mcids: Vec<i32>,
+    headers: Vec<LiteParseStr>,
+    objects: Vec<i32>,
 }
 
 /// Array lengths before a page, restored when the page is skipped.
@@ -224,6 +263,8 @@ struct Mark {
     quads: usize,
     elements: usize,
     mcids: usize,
+    headers: usize,
+    objects: usize,
 }
 
 pub(crate) struct StatedPagesState {
@@ -243,6 +284,8 @@ impl Packer {
             + bytes_of(&self.quads)
             + bytes_of(&self.elements)
             + bytes_of(&self.mcids)
+            + bytes_of(&self.headers)
+            + bytes_of(&self.objects)
     }
 
     fn mark(&self) -> Mark {
@@ -252,6 +295,8 @@ impl Packer {
             quads: self.quads.len(),
             elements: self.elements.len(),
             mcids: self.mcids.len(),
+            headers: self.headers.len(),
+            objects: self.objects.len(),
         }
     }
 
@@ -261,6 +306,8 @@ impl Packer {
         self.quads.truncate(mark.quads);
         self.elements.truncate(mark.elements);
         self.mcids.truncate(mark.mcids);
+        self.headers.truncate(mark.headers);
+        self.objects.truncate(mark.objects);
     }
 
     fn page(
@@ -456,6 +503,7 @@ impl Packer {
                         LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT,
                     ),
                 ]),
+                object_number: (pdfium.FPDFAnnot_GetObjNum)(annot).max(0) as u32,
             }
         }
     }
@@ -492,6 +540,7 @@ impl Packer {
                 }
                 let ordinal = packed_len(self.elements.len() - base + 1);
                 let mcid_offset = self.mcids.len();
+                let object_offset = self.objects.len();
                 let mut children = Vec::new();
                 for index in 0..(pdfium.FPDF_StructElement_CountChildren)(element) {
                     let id = (pdfium.FPDF_StructElement_GetChildMarkedContentID)(element, index);
@@ -501,8 +550,16 @@ impl Packer {
                     let child = (pdfium.FPDF_StructElement_GetChildAtIndex)(element, index);
                     if !child.is_null() {
                         children.push(child);
+                    } else if id < 0 {
+                        // Neither an element nor marked content: an object reference.
+                        let object = (pdfium.FPDF_StructElement_GetChildObjNum)(element, index);
+                        if object > 0 {
+                            self.objects.push(object);
+                        }
                     }
                 }
+                let attributes = read_attributes(extra, element);
+                let header_offset = self.headers.len();
                 let pool = &mut self.arenas.pool;
                 self.elements.push(LiteParseStatedElement {
                     element_type: pool.push_opt(
@@ -538,7 +595,36 @@ impl Packer {
                     parent,
                     mcid_offset: packed_len(mcid_offset),
                     mcid_count: packed_len(self.mcids.len() - mcid_offset),
+                    list_numbering: pool.push_opt(attributes.list_numbering.as_deref()),
+                    placement: pool.push_opt(attributes.placement.as_deref()),
+                    scope: pool.push_opt(attributes.scope.as_deref()),
+                    summary: pool.push_opt(attributes.summary.as_deref()),
+                    bbox: attributes.bbox.unwrap_or_default(),
+                    row_span: attributes.row_span.unwrap_or(0),
+                    col_span: attributes.col_span.unwrap_or(0),
+                    header_offset: packed_len(header_offset),
+                    header_count: packed_len(attributes.headers.len()),
+                    object_offset: packed_len(object_offset),
+                    object_count: packed_len(self.objects.len() - object_offset),
+                    flags: flag_bits(&[
+                        (
+                            attributes.bbox.is_some(),
+                            LITEPARSE_STATED_ELEMENT_FLAG_BBOX,
+                        ),
+                        (
+                            attributes.row_span.is_some(),
+                            LITEPARSE_STATED_ELEMENT_FLAG_ROW_SPAN,
+                        ),
+                        (
+                            attributes.col_span.is_some(),
+                            LITEPARSE_STATED_ELEMENT_FLAG_COL_SPAN,
+                        ),
+                    ]),
                 });
+                for header in &attributes.headers {
+                    let stored = self.arenas.pool.push(header);
+                    self.headers.push(stored);
+                }
                 if let Err(error) = check_result_bytes(self.bytes()) {
                     walked = Err(error);
                     break;
@@ -567,6 +653,10 @@ impl Packer {
             elements_len: self.elements.len(),
             mcids: array_ptr(&self.mcids),
             mcids_len: self.mcids.len(),
+            headers: array_ptr(&self.headers),
+            headers_len: self.headers.len(),
+            objects: array_ptr(&self.objects),
+            objects_len: self.objects.len(),
         };
         Ok(StatedPagesState { packer: self, view })
     }
@@ -991,4 +1081,173 @@ pub unsafe extern "C" fn liteparse_stated_pages_view(
     stated_pages: *const LiteParseStatedPages,
 ) -> *const LiteParseStatedPagesView {
     unsafe { view_of(stated_pages) }
+}
+
+/// The standard attributes of an element's `/A` that a reading of lists,
+/// figures and tables uses, each as written.
+#[derive(Default)]
+struct ElementAttributes {
+    list_numbering: Option<String>,
+    placement: Option<String>,
+    scope: Option<String>,
+    summary: Option<String>,
+    bbox: Option<LiteParseUserRect>,
+    row_span: Option<u32>,
+    col_span: Option<u32>,
+    headers: Vec<String>,
+}
+
+/// # Safety
+///
+/// `element` must be an element of a structure tree that is open.
+unsafe fn read_attributes(
+    extra: &Extra,
+    element: pdfium_sys::FPDF_STRUCTELEMENT,
+) -> ElementAttributes {
+    let pdfium = pdfium_sys::dynamic::pdfium();
+    let mut found = ElementAttributes::default();
+    // SAFETY: the caller guarantees `element` lives; each attribute and value
+    // handle is used only while it does.
+    unsafe {
+        for index in 0..(pdfium.FPDF_StructElement_GetAttributeCount)(element).max(0) {
+            let attribute = (pdfium.FPDF_StructElement_GetAttributeAtIndex)(element, index);
+            if attribute.is_null() {
+                continue;
+            }
+            let value = |key: &CStr| {
+                let value = (pdfium.FPDF_StructElement_Attr_GetValue)(attribute, key.as_ptr());
+                (!value.is_null()).then_some(value)
+            };
+            if let Some(v) = value(c"ListNumbering") {
+                found.list_numbering = found.list_numbering.or_else(|| attribute_text(v));
+            }
+            if let Some(v) = value(c"Placement") {
+                found.placement = found.placement.or_else(|| attribute_text(v));
+            }
+            if let Some(v) = value(c"Scope") {
+                found.scope = found.scope.or_else(|| attribute_text(v));
+            }
+            if let Some(v) = value(c"Summary") {
+                found.summary = found.summary.or_else(|| attribute_text(v));
+            }
+            if let Some(v) = value(c"RowSpan") {
+                found.row_span = found.row_span.or_else(|| attribute_count(v));
+            }
+            if let Some(v) = value(c"ColSpan") {
+                found.col_span = found.col_span.or_else(|| attribute_count(v));
+            }
+            if found.bbox.is_none()
+                && let Some(v) = value(c"BBox")
+            {
+                let numbers: Vec<f32> = attribute_items(extra, v)
+                    .into_iter()
+                    .filter_map(|item| attribute_number(item))
+                    .collect();
+                if let [x0, y0, x1, y1] = numbers[..] {
+                    found.bbox = normalise(x0, y0, x1, y1);
+                }
+            }
+            if found.headers.is_empty()
+                && let Some(v) = value(c"Headers")
+            {
+                found.headers = attribute_items(extra, v)
+                    .into_iter()
+                    .filter_map(|item| attribute_text(item))
+                    .collect();
+            }
+        }
+    }
+    found
+}
+
+/// A string or name value's text.
+///
+/// # Safety
+///
+/// `value` must be a live attribute value.
+unsafe fn attribute_text(value: pdfium_sys::FPDF_STRUCTELEMENT_ATTR_VALUE) -> Option<String> {
+    let pdfium = pdfium_sys::dynamic::pdfium();
+    // SAFETY: the caller guarantees `value` lives; the buffer is as long as
+    // the length passed with it.
+    unsafe {
+        let kind = (pdfium.FPDF_StructElement_Attr_GetType)(value);
+        if kind != pdfium_sys::FPDF_OBJECT_STRING as i32
+            && kind != pdfium_sys::FPDF_OBJECT_NAME as i32
+        {
+            return None;
+        }
+        let mut needed: c_ulong = 0;
+        (pdfium.FPDF_StructElement_Attr_GetStringValue)(
+            value,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed < 2 {
+            return None;
+        }
+        let mut buffer = vec![0u16; needed as usize / 2];
+        if (pdfium.FPDF_StructElement_Attr_GetStringValue)(
+            value,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        ) == 0
+        {
+            return None;
+        }
+        let end = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
+        String::from_utf16(&buffer[..end]).ok()
+    }
+}
+
+/// # Safety
+///
+/// `value` must be a live attribute value.
+unsafe fn attribute_number(value: pdfium_sys::FPDF_STRUCTELEMENT_ATTR_VALUE) -> Option<f32> {
+    let pdfium = pdfium_sys::dynamic::pdfium();
+    let mut number = 0.0;
+    // SAFETY: the caller guarantees `value` lives.
+    unsafe {
+        ((pdfium.FPDF_StructElement_Attr_GetType)(value) == pdfium_sys::FPDF_OBJECT_NUMBER as i32
+            && (pdfium.FPDF_StructElement_Attr_GetNumberValue)(value, &mut number) != 0)
+            .then_some(number)
+    }
+}
+
+/// A positive integer value, as a span is.
+///
+/// # Safety
+///
+/// `value` must be a live attribute value.
+unsafe fn attribute_count(value: pdfium_sys::FPDF_STRUCTELEMENT_ATTR_VALUE) -> Option<u32> {
+    // SAFETY: as the caller guarantees.
+    unsafe { attribute_number(value) }
+        .filter(|number| number.is_finite() && *number >= 1.0 && number.fract() == 0.0)
+        .map(|number| number as u32)
+}
+
+/// An array value's items.
+///
+/// # Safety
+///
+/// `value` must be a live attribute value.
+unsafe fn attribute_items(
+    extra: &Extra,
+    value: pdfium_sys::FPDF_STRUCTELEMENT_ATTR_VALUE,
+) -> Vec<pdfium_sys::FPDF_STRUCTELEMENT_ATTR_VALUE> {
+    let pdfium = pdfium_sys::dynamic::pdfium();
+    // SAFETY: the caller guarantees `value` lives; items live as long as it.
+    unsafe {
+        if (pdfium.FPDF_StructElement_Attr_GetType)(value) != pdfium_sys::FPDF_OBJECT_ARRAY as i32 {
+            return Vec::new();
+        }
+        (0..(extra.attr_count_children)(value).max(0))
+            .map(|index| (extra.attr_child_at_index)(value, index))
+            .filter(|item| !item.is_null())
+            .collect()
+    }
 }

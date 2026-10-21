@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 use liteparse_pdfium::pdfium_sys::{
     FPDF_ACTION, FPDF_ANNOTATION, FPDF_BOOL, FPDF_DEST, FPDF_DOCUMENT, FPDF_LINK, FPDF_PAGE,
-    FPDF_SIGNATURE, FPDF_STRUCTELEMENT, dynamic,
+    FPDF_SIGNATURE, FPDF_STRUCTELEMENT, FPDF_STRUCTELEMENT_ATTR_VALUE, dynamic,
 };
 
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_DEPENDENCY_UNAVAILABLE};
@@ -52,6 +52,14 @@ pub(crate) struct Extra {
         unsafe extern "C" fn(FPDF_SIGNATURE, *mut c_char, c_ulong) -> c_ulong,
     pub(crate) signature_time:
         unsafe extern "C" fn(FPDF_SIGNATURE, *mut c_char, c_ulong) -> c_ulong,
+    /// `FPDF_StructElement_Attr_CountChildren(value)`: an array value's length.
+    pub(crate) attr_count_children:
+        unsafe extern "C" fn(FPDF_STRUCTELEMENT_ATTR_VALUE) -> std::ffi::c_int,
+    /// `FPDF_StructElement_Attr_GetChildAtIndex(value, index)`.
+    pub(crate) attr_child_at_index: unsafe extern "C" fn(
+        FPDF_STRUCTELEMENT_ATTR_VALUE,
+        std::ffi::c_int,
+    ) -> FPDF_STRUCTELEMENT_ATTR_VALUE,
 }
 
 /// The extra symbols of the PDFium this process loaded. PDFium must be loaded
@@ -88,6 +96,8 @@ impl Extra {
                 trailer_ends: symbol(&library, c"FPDF_GetTrailerEnds")?,
                 signature_sub_filter: symbol(&library, c"FPDFSignatureObj_GetSubFilter")?,
                 signature_time: symbol(&library, c"FPDFSignatureObj_GetTime")?,
+                attr_count_children: symbol(&library, c"FPDF_StructElement_Attr_CountChildren")?,
+                attr_child_at_index: symbol(&library, c"FPDF_StructElement_Attr_GetChildAtIndex")?,
                 _library: library,
             })
         }
