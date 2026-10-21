@@ -1087,6 +1087,17 @@
 #define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT (1 << 4)
 
 /**
+ * Flag: `target_left` holds the left a link's destination states, in the
+ * target page's user space.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT (1 << 5)
+
+/**
+ * Flag: `target_top` holds the top a link's destination states.
+ */
+#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP (1 << 6)
+
+/**
  * `LiteParseInfoEntry.kind`: a text string.
  */
 #define LITEPARSE_INFO_KIND_TEXT 0
@@ -1133,6 +1144,11 @@
  * standard keys PDFium returned and `xmp` is empty.
  */
 #define LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL (1 << 3)
+
+/**
+ * Flag: `language` holds the catalog's `/Lang` as written.
+ */
+#define LITEPARSE_STATED_METADATA_FLAG_HAS_LANGUAGE (1 << 4)
 
 /**
  * `LiteParseStatedRevisions.flags` bit: PDFium reported where the file's
@@ -2535,6 +2551,12 @@ typedef struct {
    * dictionary; a structure element's object reference names it.
    */
   uint32_t object_number;
+  /**
+   * Where a link's destination places the target page, in that page's
+   * user space, when their flags are set.
+   */
+  float target_left;
+  float target_top;
 } LiteParseStatedAnnotation;
 
 /**
@@ -2686,6 +2708,11 @@ typedef struct {
    * `LITEPARSE_STATED_METADATA_FLAG_*` bits.
    */
   uint32_t flags;
+  /**
+   * The catalog's `/Lang`, the document's language, when
+   * `FLAG_HAS_LANGUAGE` is set.
+   */
+  LiteParseStr language;
 } LiteParseStatedMetadata;
 
 /**

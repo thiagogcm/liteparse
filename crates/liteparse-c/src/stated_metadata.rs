@@ -47,6 +47,8 @@ pub const LITEPARSE_STATED_METADATA_FLAG_XMP_UNREADABLE: u32 = 1 << 2;
 /// Flag: the file's objects could not be read, so `entries` holds only the
 /// standard keys PDFium returned and `xmp` is empty.
 pub const LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL: u32 = 1 << 3;
+/// Flag: `language` holds the catalog's `/Lang` as written.
+pub const LITEPARSE_STATED_METADATA_FLAG_HAS_LANGUAGE: u32 = 1 << 4;
 
 /// One `/Info` entry. Strings index the metadata's pool.
 #[repr(C)]
@@ -75,6 +77,9 @@ pub struct LiteParseStatedMetadata {
     pub xmp: LiteParseStr,
     /// `LITEPARSE_STATED_METADATA_FLAG_*` bits.
     pub flags: u32,
+    /// The catalog's `/Lang`, the document's language, when
+    /// `FLAG_HAS_LANGUAGE` is set.
+    pub language: LiteParseStr,
 }
 
 /// The metadata packed once, with the storage behind its view.
@@ -110,6 +115,7 @@ pub(crate) fn read(source: &Source, lib: &Library) -> FfiResult<StatedMetadataSt
     let mut pool = Pool::default();
     let mut entries = Vec::new();
     let mut xmp = LiteParseStr::default();
+    let mut language = LiteParseStr::default();
     let mut flags = 0;
     if !source.is_converted() {
         match load(&source.input, source.config.password.as_deref())
@@ -119,6 +125,7 @@ pub(crate) fn read(source: &Source, lib: &Library) -> FfiResult<StatedMetadataSt
                 flags |= read.0;
                 entries = read.1;
                 xmp = read.2;
+                language = read.3;
             }
             None => {
                 flags |= LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL;
@@ -143,6 +150,7 @@ pub(crate) fn read(source: &Source, lib: &Library) -> FfiResult<StatedMetadataSt
         entries_len: entries.len(),
         xmp,
         flags,
+        language,
     };
     Ok(StatedMetadataState {
         pool,
@@ -156,11 +164,34 @@ pub(crate) fn read(source: &Source, lib: &Library) -> FfiResult<StatedMetadataSt
 /// reader loads a damaged file without complaint and leaves out the objects it
 /// could not parse, so a trailer or catalog that names an object the reader
 /// lacks says the whole read cannot be trusted.
-fn stated(pdf: &Pdf, pool: &mut Pool) -> Option<(u32, Vec<LiteParseInfoEntry>, LiteParseStr)> {
+fn stated(
+    pdf: &Pdf,
+    pool: &mut Pool,
+) -> Option<(u32, Vec<LiteParseInfoEntry>, LiteParseStr, LiteParseStr)> {
     let mut entries = Vec::new();
     let mut xmp = LiteParseStr::default();
-    let flags = info(pdf, pool, &mut entries)? | packet(pdf, pool, &mut xmp)?;
-    Some((flags, entries, xmp))
+    let mut language = LiteParseStr::default();
+    let flags = info(pdf, pool, &mut entries)?
+        | packet(pdf, pool, &mut xmp)?
+        | catalog_language(pdf, pool, &mut language);
+    Some((flags, entries, xmp, language))
+}
+
+/// Pack the catalog's `/Lang` as written; the flag it contributes.
+fn catalog_language(pdf: &Pdf, pool: &mut Pool, language: &mut LiteParseStr) -> u32 {
+    let Some(value) = pdf
+        .catalog()
+        .ok()
+        .and_then(|catalog| catalog.get(b"Lang").ok())
+    else {
+        return 0;
+    };
+    let value = pdf.dereference(value).map_or(value, |(_, value)| value);
+    if !matches!(value, Object::String(..)) {
+        return 0;
+    }
+    *language = pool.push(&describe(pdf, value).1);
+    LITEPARSE_STATED_METADATA_FLAG_HAS_LANGUAGE
 }
 
 /// The file's objects, decrypted when the file is encrypted; `None` when the
