@@ -347,6 +347,16 @@
 #define LITEPARSE_TYPE_STATED_METADATA 66
 
 /**
+ * `liteparse_sizeof` selector for `LiteParseStatedSignature`.
+ */
+#define LITEPARSE_TYPE_STATED_SIGNATURE 67
+
+/**
+ * `liteparse_sizeof` selector for `LiteParseStatedRevisions`.
+ */
+#define LITEPARSE_TYPE_STATED_REVISIONS 68
+
+/**
  * Maximum sum of flat input array bytes accepted from caller-supplied content.
  */
 #define LITEPARSE_MAX_CONTENT_INPUT_BYTES ((256 * 1024) * 1024)
@@ -1108,6 +1118,18 @@
  * standard keys PDFium returned and `xmp` is empty.
  */
 #define LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL (1 << 3)
+
+/**
+ * `LiteParseStatedRevisions.flags` bit: PDFium reported where the file's
+ * trailers end, and `ends` holds those ends, oldest first.
+ */
+#define LITEPARSE_STATED_REVISIONS_FLAG_ENDS (1 << 0)
+
+/**
+ * Flag: PDFium reads signatures; when clear, `signatures` is empty because
+ * the loaded PDFium has no signature support, not because the file has none.
+ */
+#define LITEPARSE_STATED_REVISIONS_FLAG_SIGNATURES (1 << 1)
 
 /**
  * Per-page complexity signals. Views borrow from the handle.
@@ -2603,6 +2625,52 @@ typedef struct {
 } LiteParseStatedMetadata;
 
 /**
+ * One signature dictionary. Strings index the view's pool; `range_offset` and
+ * `range_count` range into the view's `ranges`.
+ */
+typedef struct {
+  /**
+   * `/SubFilter` without its slash.
+   */
+  LiteParseStr sub_filter;
+  /**
+   * `/M` as written.
+   */
+  LiteParseStr time;
+  uint32_t range_offset;
+  uint32_t range_count;
+} LiteParseStatedSignature;
+
+/**
+ * What the file states about its revisions and signatures, as PDFium reads
+ * them. Borrowed until the document is freed. Every field is empty for an
+ * input that was converted to PDF.
+ */
+typedef struct {
+  /**
+   * String pool behind `signatures`.
+   */
+  const uint8_t *pool;
+  size_t pool_len;
+  /**
+   * The byte offsets at which the file's trailers end, oldest first.
+   */
+  const uint64_t *ends;
+  size_t ends_len;
+  const LiteParseStatedSignature *signatures;
+  size_t signatures_len;
+  /**
+   * The `/ByteRange` entries of every signature, in order.
+   */
+  const int64_t *ranges;
+  size_t ranges_len;
+  /**
+   * `LITEPARSE_STATED_REVISIONS_FLAG_*` bits.
+   */
+  uint32_t flags;
+} LiteParseStatedRevisions;
+
+/**
  * The operation succeeded.
  */
 #define LITEPARSE_STATUS_OK 0
@@ -3097,6 +3165,17 @@ const LiteParseStatedPagesView *liteparse_stated_pages_view(const LiteParseState
  */
 LiteParseStatus liteparse_document_stated_metadata(const LiteParseDocument *document,
                                                    const LiteParseStatedMetadata **out);
+
+/**
+ * Borrow the file's revisions and signatures as PDFium reads them (see
+ * [`LiteParseStatedRevisions`]). The first call on a document reads and the
+ * document keeps it; the view is valid until the document is freed.
+ *
+ * `document` must be live and `out` writable; `out` receives null on
+ * failure.
+ */
+LiteParseStatus liteparse_document_stated_revisions(const LiteParseDocument *document,
+                                                    const LiteParseStatedRevisions **out);
 
 /**
  * Borrow this thread's most recent failure message into `out`. The view

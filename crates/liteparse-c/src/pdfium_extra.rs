@@ -7,13 +7,13 @@
 //! linker hands back the same mapping and counts a reference), and the extra
 //! symbols are resolved from that handle. A process still holds one PDFium.
 
-use std::ffi::{CStr, c_uint, c_ulong, c_void};
+use std::ffi::{CStr, c_char, c_uint, c_ulong, c_void};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use liteparse_pdfium::pdfium_sys::{
     FPDF_ACTION, FPDF_ANNOTATION, FPDF_BOOL, FPDF_DEST, FPDF_DOCUMENT, FPDF_LINK, FPDF_PAGE,
-    FPDF_STRUCTELEMENT, dynamic,
+    FPDF_SIGNATURE, FPDF_STRUCTELEMENT, dynamic,
 };
 
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_DEPENDENCY_UNAVAILABLE};
@@ -47,6 +47,11 @@ pub(crate) struct Extra {
     /// `FPDF_StructElement_GetLang(element, buffer, length)`: UTF-16LE.
     pub(crate) struct_element_lang:
         unsafe extern "C" fn(FPDF_STRUCTELEMENT, *mut c_void, c_ulong) -> c_ulong,
+    pub(crate) trailer_ends: unsafe extern "C" fn(FPDF_DOCUMENT, *mut c_uint, c_ulong) -> c_ulong,
+    pub(crate) signature_sub_filter:
+        unsafe extern "C" fn(FPDF_SIGNATURE, *mut c_char, c_ulong) -> c_ulong,
+    pub(crate) signature_time:
+        unsafe extern "C" fn(FPDF_SIGNATURE, *mut c_char, c_ulong) -> c_ulong,
 }
 
 /// The extra symbols of the PDFium this process loaded. PDFium must be loaded
@@ -80,6 +85,9 @@ impl Extra {
                 link_dest: symbol(&library, c"FPDFLink_GetDest")?,
                 action_type: symbol(&library, c"FPDFAction_GetType")?,
                 struct_element_lang: symbol(&library, c"FPDF_StructElement_GetLang")?,
+                trailer_ends: symbol(&library, c"FPDF_GetTrailerEnds")?,
+                signature_sub_filter: symbol(&library, c"FPDFSignatureObj_GetSubFilter")?,
+                signature_time: symbol(&library, c"FPDFSignatureObj_GetTime")?,
                 _library: library,
             })
         }

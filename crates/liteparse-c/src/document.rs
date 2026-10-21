@@ -27,6 +27,7 @@ use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
 use crate::stated::FileFacts;
 use crate::stated_metadata::{self, LiteParseStatedMetadata, StatedMetadataState};
+use crate::stated_revisions::{self, LiteParseStatedRevisions, StatedRevisionsState};
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
 /// Page region in top-left-origin viewport points. Must fit within the page.
@@ -297,6 +298,8 @@ pub(crate) struct DocumentState {
     metadata: OnceLock<MetadataState>,
     /// What the file states about itself, read by the first call that asks.
     stated_metadata: OnceLock<StatedMetadataState>,
+    /// The file's revisions and signatures, read by the first call that asks.
+    stated_revisions: OnceLock<StatedRevisionsState>,
 }
 
 view_state!(DocumentState => LiteParseDocumentInfo, info);
@@ -361,6 +364,7 @@ impl DocumentState {
             info,
             metadata: OnceLock::new(),
             stated_metadata: OnceLock::new(),
+            stated_revisions: OnceLock::new(),
         })
     }
 
@@ -410,6 +414,21 @@ impl DocumentState {
                 .set(stated_metadata::read(&self.source, &lib)?);
         }
         Ok(&self.stated_metadata.get().expect("set above").view)
+    }
+
+    /// The revisions and signatures PDFium reads, read once under the PDFium
+    /// lock like [`Self::metadata`].
+    pub(crate) fn stated_revisions(&self) -> FfiResult<&LiteParseStatedRevisions> {
+        if let Some(state) = self.stated_revisions.get() {
+            return Ok(&state.view);
+        }
+        let lib = Library::try_init()?;
+        if self.stated_revisions.get().is_none() {
+            let _ = self
+                .stated_revisions
+                .set(stated_revisions::read(&self.source, &lib)?);
+        }
+        Ok(&self.stated_revisions.get().expect("set above").view)
     }
 
     pub(crate) fn source(&self) -> Arc<Source> {

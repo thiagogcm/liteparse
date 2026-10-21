@@ -30,6 +30,7 @@ use crate::stated::{
     LiteParseStatedPagesView, LiteParseUserQuad, LiteParseUserRect,
 };
 use crate::stated_metadata::{LiteParseInfoEntry, LiteParseStatedMetadata};
+use crate::stated_revisions::{LiteParseStatedRevisions, LiteParseStatedSignature};
 use crate::{LiteParseComplexityView, LiteParsePageComplexity};
 
 /// FNV-1a over the generated header with `\r` removed, so every checkout
@@ -252,6 +253,10 @@ pub const LITEPARSE_TYPE_STATED_PAGES_VIEW: u32 = 64;
 pub const LITEPARSE_TYPE_INFO_ENTRY: u32 = 65;
 /// `liteparse_sizeof` selector for `LiteParseStatedMetadata`.
 pub const LITEPARSE_TYPE_STATED_METADATA: u32 = 66;
+/// `liteparse_sizeof` selector for `LiteParseStatedSignature`.
+pub const LITEPARSE_TYPE_STATED_SIGNATURE: u32 = 67;
+/// `liteparse_sizeof` selector for `LiteParseStatedRevisions`.
+pub const LITEPARSE_TYPE_STATED_REVISIONS: u32 = 68;
 
 /// `sizeof` the struct a `LITEPARSE_TYPE_*` selector names, or zero for an
 /// unknown selector. Lets a binding that declares layouts by hand assert
@@ -328,6 +333,8 @@ pub extern "C" fn liteparse_sizeof(type_id: u32) -> usize {
         LITEPARSE_TYPE_STATED_PAGES_VIEW => size_of::<LiteParseStatedPagesView>(),
         LITEPARSE_TYPE_INFO_ENTRY => size_of::<LiteParseInfoEntry>(),
         LITEPARSE_TYPE_STATED_METADATA => size_of::<LiteParseStatedMetadata>(),
+        LITEPARSE_TYPE_STATED_SIGNATURE => size_of::<LiteParseStatedSignature>(),
+        LITEPARSE_TYPE_STATED_REVISIONS => size_of::<LiteParseStatedRevisions>(),
         _ => 0,
     }
 }
@@ -401,6 +408,8 @@ const ABI_TYPE_IDS: &[u32] = &[
     LITEPARSE_TYPE_STATED_PAGES_VIEW,
     LITEPARSE_TYPE_INFO_ENTRY,
     LITEPARSE_TYPE_STATED_METADATA,
+    LITEPARSE_TYPE_STATED_SIGNATURE,
+    LITEPARSE_TYPE_STATED_REVISIONS,
 ];
 
 #[cfg(test)]
