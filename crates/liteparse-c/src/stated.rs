@@ -80,6 +80,11 @@ pub const LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ: u32 = 1 << 3;
 /// when the file's objects could not be read and PDFium supplied the colour:
 /// three components, `0` to `1` in 8-bit steps, as PDFium converts them.
 pub const LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT: u32 = 1 << 4;
+/// Flag: `target_left` holds the left a link's destination states, in the
+/// target page's user space.
+pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT: u32 = 1 << 5;
+/// Flag: `target_top` holds the top a link's destination states.
+pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP: u32 = 1 << 6;
 
 /// A rectangle in PDF user space: normalised, `x0 <= x1` and `y0 <= y1`.
 #[repr(C)]
@@ -143,6 +148,10 @@ pub struct LiteParseStatedAnnotation {
     /// The annotation dictionary's object number, `0` for a direct
     /// dictionary; a structure element's object reference names it.
     pub object_number: u32,
+    /// Where a link's destination places the target page, in that page's
+    /// user space, when their flags are set.
+    pub target_left: f32,
+    pub target_top: f32,
 }
 
 /// One structure element of a page's tree. Strings index the view's pool;
@@ -454,10 +463,10 @@ impl Packer {
                     None => read_colour(extra, annot).map(|rgb| (rgb, false)),
                 })
                 .flatten();
-            let (uri, target_page) = if subtype == "Link" {
+            let (uri, target_page, target_left, target_top) = if subtype == "Link" {
                 link_target(extra, document, annot)
             } else {
-                (None, 0)
+                (None, 0, None, None)
             };
 
             let pool = &mut self.arenas.pool;
@@ -502,8 +511,18 @@ impl Packer {
                         colour.as_ref().is_some_and(|(_, exact)| *exact),
                         LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT,
                     ),
+                    (
+                        target_left.is_some(),
+                        LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT,
+                    ),
+                    (
+                        target_top.is_some(),
+                        LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP,
+                    ),
                 ]),
                 object_number: (pdfium.FPDFAnnot_GetObjNum)(annot).max(0) as u32,
+                target_left: target_left.unwrap_or(0.0),
+                target_top: target_top.unwrap_or(0.0),
             }
         }
     }
@@ -913,14 +932,14 @@ unsafe fn link_target(
     extra: &Extra,
     document: &RawDocument<'_>,
     annot: pdfium_sys::FPDF_ANNOTATION,
-) -> (Option<String>, u32) {
+) -> (Option<String>, u32, Option<f32>, Option<f32>) {
     let pdfium = pdfium_sys::dynamic::pdfium();
     // SAFETY: the caller guarantees `annot` is open on `document`; the link,
     // action and destination handles belong to it and are not freed.
     unsafe {
         let link = (pdfium.FPDFAnnot_GetLink)(annot);
         if link.is_null() {
-            return (None, 0);
+            return (None, 0, None, None);
         }
         let mut dest = (extra.link_dest)(document.handle, link);
         let action = (pdfium.FPDFLink_GetAction)(link);
@@ -936,7 +955,24 @@ unsafe fn link_target(
         } else {
             (pdfium.FPDFDest_GetDestPageIndex)(document.handle, dest)
         };
-        (uri, u32::try_from(page).map_or(0, |index| index + 1))
+        let (mut has_x, mut has_y, mut has_zoom) = (0, 0, 0);
+        let (mut x, mut y, mut zoom) = (0.0f32, 0.0f32, 0.0f32);
+        let located = !dest.is_null()
+            && (pdfium.FPDFDest_GetLocationInPage)(
+                dest,
+                &mut has_x,
+                &mut has_y,
+                &mut has_zoom,
+                &mut x,
+                &mut y,
+                &mut zoom,
+            ) != 0;
+        (
+            uri,
+            u32::try_from(page).map_or(0, |index| index + 1),
+            (located && has_x != 0 && x.is_finite()).then_some(x),
+            (located && has_y != 0 && y.is_finite()).then_some(y),
+        )
     }
 }
 
