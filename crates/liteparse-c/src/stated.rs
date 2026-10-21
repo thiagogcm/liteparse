@@ -5,28 +5,26 @@
 //! size, annotations flattened to rectangles. This module answers in PDF user
 //! space, the space the page dictionary uses:
 //!
-//! - the five page boxes, each present only when the page states it, or, for
-//!   the media and crop box, when an ancestor in the page tree does;
+//! - the five page boxes, each present only when the page dictionary states
+//!   it: PDFium reads no box a page inherits from the page tree;
 //! - every annotation of the page's `/Annots` array in array order, with its
 //!   `/Subtype` name, `/F` flags, `/NM`, `/T`, `/Contents`, raw `/M` and
-//!   `/CreationDate`, the true corners of its `/QuadPoints`, its `/C` colour,
-//!   a link's URI and the page a link jumps to;
+//!   `/CreationDate`, the true corners of its `/QuadPoints`, a link's URI and
+//!   the page a link jumps to;
 //! - the structure elements of the page's tree, in pre-order, with `/Lang`,
 //!   `/ID`, alternate and actual text and the marked-content ids of the
 //!   element's own content.
 //!
 //! PDFium reads the pages, from [a second document](crate::raw) over the same
 //! input, so no orientation correction or form flattening applies to them.
-//! PDFium reads the page dictionary alone and reports a colour as three
-//! converted components, so the boxes a page inherits and the exact `/C`
-//! arrays come from the file's own objects ([`FileFacts`]), read once per
-//! document. PDFium reads no structure tree in a document whose catalog does
-//! not mark it tagged (`/MarkInfo /Marked true`); a page of a document that
-//! has a tree all the same says so ([`LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD`]).
+//! PDFium reports a colour only converted to RGB in 8-bit steps, so no colour
+//! is read. PDFium reads no structure tree in a document whose catalog does
+//! not mark it tagged (`/MarkInfo /Marked true`), and each page of such a
+//! document says so ([`LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD`]).
 
 use std::ffi::{CStr, c_int, c_ulong, c_void};
 
-use liteparse::types::{PageError, PdfInput};
+use liteparse::types::PageError;
 use liteparse_pdfium::{Library, pdfium_sys};
 
 use crate::budget::{bytes_of, check_result_bytes};
@@ -44,10 +42,9 @@ use crate::status::{
     LiteParseStatus,
 };
 
-/// `LiteParseStatedPage.flags` bit: the page states, or inherits, a media box.
-/// A page that does not has no usable size; PDFium itself falls back to letter.
+/// `LiteParseStatedPage.flags` bit: the page dictionary states a media box.
 pub const LITEPARSE_STATED_PAGE_FLAG_MEDIA_BOX: u32 = 1 << 0;
-/// Flag: a crop box is stated or inherited.
+/// Flag: the page dictionary states a crop box.
 pub const LITEPARSE_STATED_PAGE_FLAG_CROP_BOX: u32 = 1 << 1;
 /// Flag: the page dictionary states a bleed box.
 pub const LITEPARSE_STATED_PAGE_FLAG_BLEED_BOX: u32 = 1 << 2;
@@ -55,9 +52,9 @@ pub const LITEPARSE_STATED_PAGE_FLAG_BLEED_BOX: u32 = 1 << 2;
 pub const LITEPARSE_STATED_PAGE_FLAG_TRIM_BOX: u32 = 1 << 3;
 /// Flag: the page dictionary states an art box.
 pub const LITEPARSE_STATED_PAGE_FLAG_ART_BOX: u32 = 1 << 4;
-/// Flag: the catalog names a structure tree that PDFium does not read, because
-/// the catalog does not mark the document tagged (`/MarkInfo /Marked true`).
-/// The page then states no structure elements, whatever the tree holds.
+/// Flag: the catalog does not mark the document tagged (`/MarkInfo /Marked
+/// true`), so PDFium reads no structure tree and the page states no structure
+/// elements, whatever the file holds.
 pub const LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD: u32 = 1 << 5;
 
 /// `LiteParseStatedAnnotation.flags` bit: PDFium reported the annotation's
@@ -71,20 +68,11 @@ pub const LITEPARSE_STATED_ELEMENT_FLAG_ROW_SPAN: u32 = 1 << 1;
 pub const LITEPARSE_STATED_ELEMENT_FLAG_COL_SPAN: u32 = 1 << 2;
 /// Flag: the annotation states `/F`; `pdf_flags` holds it.
 pub const LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS: u32 = 1 << 1;
-/// Flag: the annotation states `/C`.
-pub const LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_STATED: u32 = 1 << 2;
-/// Flag: `colour_count` and the first `colour_count` of `colour` hold the stated
-/// `/C`. Clear while `COLOUR_STATED` is set when the value could not be read.
-pub const LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ: u32 = 1 << 3;
-/// Flag: the colour components are the array as the file writes it. Clear
-/// when the file's objects could not be read and PDFium supplied the colour:
-/// three components, `0` to `1` in 8-bit steps, as PDFium converts them.
-pub const LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT: u32 = 1 << 4;
 /// Flag: `target_left` holds the left a link's destination states, in the
 /// target page's user space.
-pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT: u32 = 1 << 5;
+pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT: u32 = 1 << 2;
 /// Flag: `target_top` holds the top a link's destination states.
-pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP: u32 = 1 << 6;
+pub const LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP: u32 = 1 << 3;
 
 /// A rectangle in PDF user space: normalised, `x0 <= x1` and `y0 <= y1`.
 #[repr(C)]
@@ -138,11 +126,6 @@ pub struct LiteParseStatedAnnotation {
     /// The 1-based page a link jumps to within this document, `0` when it
     /// jumps nowhere or somewhere PDFium cannot resolve to a page.
     pub target_page: u32,
-    /// How many of `colour` are meaningful: `0`, `1`, `3` or `4`, when
-    /// `COLOUR_READ` is set.
-    pub colour_count: u32,
-    /// `/C` components, in the order the array holds them.
-    pub colour: [f32; 4],
     /// `LITEPARSE_STATED_ANNOTATION_FLAG_*` bits.
     pub flags: u32,
     /// The annotation dictionary's object number, `0` for a direct
@@ -325,13 +308,12 @@ impl Packer {
         document: &RawDocument<'_>,
         page_number: u32,
         page: &RawPage<'_>,
-        inherited: Option<&PageTreeFacts>,
         structure_unread: bool,
     ) -> FfiResult {
         let pdfium = pdfium_sys::dynamic::pdfium();
         let boxes = [
-            page_box(extra.media_box, page).or(inherited.and_then(|boxes| boxes.media)),
-            page_box(extra.crop_box, page).or(inherited.and_then(|boxes| boxes.crop)),
+            page_box(extra.media_box, page),
+            page_box(extra.crop_box, page),
             page_box(extra.bleed_box, page),
             page_box(extra.trim_box, page),
             page_box(extra.art_box, page),
@@ -342,7 +324,7 @@ impl Packer {
             .FPDFPage_GetUserUnit
             .map_or(1.0, |user_unit| unsafe { user_unit(page.handle) });
         let annotation_offset = self.annotations.len();
-        self.annotations_of(extra, document, page, inherited)?;
+        self.annotations_of(extra, document, page)?;
         let annotation_count = self.annotations.len() - annotation_offset;
         let element_offset = self.elements.len();
         self.elements_of(extra, page)?;
@@ -378,14 +360,11 @@ impl Packer {
         check_result_bytes(self.bytes())
     }
 
-    /// `facts` are the page tree's facts about this page, `None` when the
-    /// file's objects could not be read.
     fn annotations_of(
         &mut self,
         extra: &Extra,
         document: &RawDocument<'_>,
         page: &RawPage<'_>,
-        facts: Option<&PageTreeFacts>,
     ) -> FfiResult {
         let pdfium = pdfium_sys::dynamic::pdfium();
         // SAFETY: `page` is a live page; each annotation is closed before the
@@ -398,10 +377,7 @@ impl Packer {
                     // An /Annots entry that is not a dictionary.
                     continue;
                 }
-                // `/Annots` entries and PDFium's annotations share an index.
-                let colour =
-                    facts.map(|facts| facts.colours.get(index as usize).and_then(Option::as_deref));
-                let record = self.annotation(extra, document, annot, colour);
+                let record = self.annotation(extra, document, annot);
                 (pdfium.FPDFPage_CloseAnnot)(annot);
                 self.annotations.push(record);
                 check_result_bytes(self.bytes())?;
@@ -418,7 +394,6 @@ impl Packer {
         extra: &Extra,
         document: &RawDocument<'_>,
         annot: pdfium_sys::FPDF_ANNOTATION,
-        colour: Option<Option<&[f32]>>,
     ) -> LiteParseStatedAnnotation {
         let pdfium = pdfium_sys::dynamic::pdfium();
         // SAFETY: the caller guarantees `annot` is open.
@@ -452,17 +427,6 @@ impl Packer {
             }
 
             let has_pdf_flags = has_key(annot, c"F");
-            let colour_stated = has_key(annot, c"C");
-            let colour = colour_stated
-                .then(|| match colour {
-                    // The array as the file writes it.
-                    Some(components) => components
-                        .filter(|components| components.len() <= 4)
-                        .map(|components| (components.to_vec(), true)),
-                    // The file's objects could not be read: PDFium's conversion.
-                    None => read_colour(extra, annot).map(|rgb| (rgb, false)),
-                })
-                .flatten();
             let (uri, target_page, target_left, target_top) = if subtype == "Link" {
                 link_target(extra, document, annot)
             } else {
@@ -487,29 +451,11 @@ impl Packer {
                     0
                 },
                 target_page,
-                colour_count: colour.as_ref().map_or(0, |(c, _)| c.len() as u32),
-                colour: colour.as_ref().map_or([0.0; 4], |(components, _)| {
-                    let mut padded = [0.0; 4];
-                    padded[..components.len()].copy_from_slice(components);
-                    padded
-                }),
                 flags: flag_bits(&[
                     (rect.is_some(), LITEPARSE_STATED_ANNOTATION_FLAG_HAS_RECT),
                     (
                         has_pdf_flags,
                         LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS,
-                    ),
-                    (
-                        colour_stated,
-                        LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_STATED,
-                    ),
-                    (
-                        colour.is_some(),
-                        LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ,
-                    ),
-                    (
-                        colour.as_ref().is_some_and(|(_, exact)| *exact),
-                        LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT,
                     ),
                     (
                         target_left.is_some(),
@@ -681,116 +627,6 @@ impl Packer {
     }
 }
 
-/// What the file's own objects state that PDFium does not report: the facts
-/// of each page of the page tree, in page order, and whether the catalog names
-/// a structure tree.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FileFacts {
-    pages: Vec<PageTreeFacts>,
-    structure_tree: bool,
-}
-
-impl FileFacts {
-    /// The facts of the file; `None` when its objects cannot be read. The
-    /// reader loads every object of the file, so this runs once per document.
-    pub(crate) fn read(input: &PdfInput, password: Option<&str>) -> Option<Self> {
-        let pdf = crate::stated_metadata::load(input, password)?;
-        let structure_tree = pdf
-            .catalog()
-            .is_ok_and(|catalog| catalog.has(b"StructTreeRoot"));
-        Some(Self {
-            pages: PageTreeFacts::read(&pdf),
-            structure_tree,
-        })
-    }
-}
-
-/// What the file's own objects state about one page and PDFium does not
-/// report: the media and crop boxes the page inherits from the page tree, and
-/// the exact `/C` array of each of its annotations. PDFium reads the page
-/// dictionary alone, hides how many components a colour array holds and
-/// refuses the colour of an annotation that has an appearance stream.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct PageTreeFacts {
-    media: Option<LiteParseUserRect>,
-    crop: Option<LiteParseUserRect>,
-    /// `/C` of each `/Annots` entry, by array index: `None` for an entry that is
-    /// not a dictionary or has no `/C` array.
-    colours: Vec<Option<Vec<f32>>>,
-}
-
-/// The deepest page tree followed.
-const MAX_PAGE_TREE_DEPTH: usize = 64;
-
-impl PageTreeFacts {
-    /// The facts of every page of the file's page tree, in page order.
-    fn read(pdf: &lopdf::Document) -> Vec<Self> {
-        pdf.get_pages()
-            .values()
-            .map(|page| Self {
-                media: Self::inherited_box(pdf, *page, b"MediaBox"),
-                crop: Self::inherited_box(pdf, *page, b"CropBox"),
-                colours: Self::colours(pdf, *page),
-            })
-            .collect()
-    }
-
-    /// The nearest box called `key` on the page or an ancestor.
-    fn inherited_box(
-        pdf: &lopdf::Document,
-        page: lopdf::ObjectId,
-        key: &[u8],
-    ) -> Option<LiteParseUserRect> {
-        let mut id = page;
-        for _ in 0..MAX_PAGE_TREE_DEPTH {
-            let node = pdf.get_dictionary(id).ok()?;
-            if let Ok(value) = node.get(key) {
-                return Self::rect(pdf, value);
-            }
-            id = node.get(b"Parent").ok()?.as_reference().ok()?;
-        }
-        None
-    }
-
-    fn rect(pdf: &lopdf::Document, value: &lopdf::Object) -> Option<LiteParseUserRect> {
-        let [left, bottom, right, top] = *Self::numbers(pdf, value)? else {
-            return None;
-        };
-        normalise(left, bottom, right, top)
-    }
-
-    /// An array of numbers, each possibly an indirect object.
-    fn numbers(pdf: &lopdf::Document, value: &lopdf::Object) -> Option<Vec<f32>> {
-        pdf.dereference(value)
-            .ok()?
-            .1
-            .as_array()
-            .ok()?
-            .iter()
-            .map(|number| pdf.dereference(number).ok()?.1.as_float().ok())
-            .collect()
-    }
-
-    fn colours(pdf: &lopdf::Document, page: lopdf::ObjectId) -> Vec<Option<Vec<f32>>> {
-        let Some(annots) = pdf
-            .get_dictionary(page)
-            .ok()
-            .and_then(|page| page.get(b"Annots").ok())
-            .and_then(|annots| pdf.dereference(annots).ok())
-            .and_then(|(_, annots)| annots.as_array().ok())
-        else {
-            return Vec::new();
-        };
-        annots
-            .iter()
-            .map(|annot| {
-                let annot = pdf.dereference(annot).ok()?.1.as_dict().ok()?;
-                Self::numbers(pdf, annot.get(b"C").ok()?)
-            })
-            .collect()
-    }
-}
-
 fn page_box(read: PageBoxFn, page: &RawPage<'_>) -> Option<LiteParseUserRect> {
     let (mut left, mut bottom, mut right, mut top) = (0.0, 0.0, 0.0, 0.0);
     // SAFETY: `page` is a live page and the four floats are writable.
@@ -889,7 +725,7 @@ unsafe fn key_text(
 /// A UTF-16LE string from PDFium's length-then-fill protocol: `read(null, 0)`
 /// reports the byte length with the terminating NUL, `read(buffer, length)`
 /// fills it. `None` for an empty string.
-fn utf16(mut read: impl FnMut(*mut c_void, c_ulong) -> c_ulong) -> Option<String> {
+pub(crate) fn utf16(mut read: impl FnMut(*mut c_void, c_ulong) -> c_ulong) -> Option<String> {
     let needed = read(std::ptr::null_mut(), 0) as usize;
     if needed < 2 {
         return None;
@@ -901,26 +737,6 @@ fn utf16(mut read: impl FnMut(*mut c_void, c_ulong) -> c_ulong) -> Option<String
         end -= 1;
     }
     (end > 0).then(|| String::from_utf16_lossy(&buffer[..end]))
-}
-
-/// `/C` as PDFium converts it: red, green and blue in `0` to `1`, in 8-bit
-/// steps. PDFium reads the first three components whatever the array holds,
-/// converts a four-component one and refuses an annotation that has an
-/// appearance stream.
-///
-/// # Safety
-///
-/// `annot` must be open.
-unsafe fn read_colour(extra: &Extra, annot: pdfium_sys::FPDF_ANNOTATION) -> Option<Vec<f32>> {
-    let (mut red, mut green, mut blue, mut alpha) = (0, 0, 0, 0);
-    // SAFETY: the caller guarantees `annot` is open; the four are writable.
-    let read =
-        unsafe { (extra.annot_color)(annot, 0, &mut red, &mut green, &mut blue, &mut alpha) };
-    (read != 0).then(|| {
-        [red, green, blue]
-            .map(|channel| channel.min(255) as f32 / 255.0)
-            .to_vec()
-    })
 }
 
 /// A link annotation's URI and the 1-based page it jumps to.
@@ -1009,10 +825,6 @@ pub(crate) fn extract_stated_pages(
     state: &DocumentState,
     pages: Option<Vec<u32>>,
 ) -> FfiResult<StatedPagesState> {
-    // Before the PDFium lock: loading the file's objects does not touch PDFium.
-    let facts = state
-        .file_facts
-        .get_or_init(|| FileFacts::read(&state.input, state.config.password.as_deref()));
     let lib = Library::try_init()?;
     let extra_symbols = extra()?;
     let raw = RawDocument::open(
@@ -1028,29 +840,15 @@ pub(crate) fn extract_stated_pages(
     .unwrap_or(0);
     let mut pages = pages.unwrap_or_else(|| (1..=page_count).collect());
     pages.truncate(state.config.max_pages);
-    // Page order is the same in both readers when the page counts agree.
-    let inherited = facts
-        .as_ref()
-        .map(|facts| facts.pages.as_slice())
-        .filter(|pages| pages.len() == page_count as usize);
     // SAFETY: `raw` is open under the PDFium lock `lib` holds.
     let tagged = unsafe { (pdfium_sys::dynamic::pdfium().FPDFCatalog_IsTagged)(raw.handle) } != 0;
-    let structure_unread = !tagged && facts.as_ref().is_some_and(|facts| facts.structure_tree);
     let mut packer = Packer::default();
     let mut errors = Vec::new();
     for page_number in pages {
         let mark = packer.mark();
-        let packed = raw.page(page_number as i32 - 1).and_then(|page| {
-            let boxes = inherited.and_then(|boxes| boxes.get(page_number as usize - 1));
-            packer.page(
-                extra_symbols,
-                &raw,
-                page_number,
-                &page,
-                boxes,
-                structure_unread,
-            )
-        });
+        let packed = raw
+            .page(page_number as i32 - 1)
+            .and_then(|page| packer.page(extra_symbols, &raw, page_number, &page, !tagged));
         match packed {
             Ok(()) => {}
             Err(error) => {
@@ -1076,14 +874,6 @@ pub(crate) fn extract_stated_pages(
 /// Null `pages` with zero length selects all; a selection is validated against
 /// the page count, de-duplicated and read in ascending order, and
 /// `max_pages` caps either form.
-///
-/// The media and crop boxes a page inherits and the exact `/C` arrays of its
-/// annotations come from the file's own objects, which the first call on a
-/// document loads whole: on a file with many objects that costs more than a
-/// parse, and the document keeps what it found. When those objects cannot be
-/// read, a page states the boxes its own dictionary holds and PDFium's
-/// conversion of a colour (`COLOUR_EXACT` clear), and no page sets
-/// `STRUCTURE_UNREAD`.
 ///
 /// `document` must be live, `pages` readable or null with zero length, and
 /// `out` writable.

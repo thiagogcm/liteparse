@@ -251,10 +251,9 @@ rotation handling displaced content.
 
 | Function | Notes |
 |---|---|
-| `liteparse_document_info` | Page count, `LITEPARSE_DOCUMENT_FLAG_CONVERTED`, and bookmarks walked at open, each listed once: an outline whose links loop ends. |
+| `liteparse_document_info` | Page count, `LITEPARSE_DOCUMENT_FLAG_CONVERTED`, and the bookmarks the core walks at open. |
 | `liteparse_document_metadata(doc, &view)` | The source file's metadata, read on the first call and kept; see Document metadata. |
-| `liteparse_document_stated_metadata(doc, &view)` | Every `/Info` entry with its kind of value and the whole XMP packet, read on the first call and kept; see Stated pages and metadata. |
-| `liteparse_document_stated_pages(doc, pages, len, &out)` | Page boxes, annotations and structure elements in PDF user space, as the file states them; see Stated pages and metadata. |
+| `liteparse_document_stated_pages(doc, pages, len, &out)` | Page boxes, annotations and structure elements in PDF user space, as PDFium reads them; see Stated pages. |
 | `liteparse_document_parse(doc, pages, len, &out)` | Parse the given 1-based pages, or every page when `pages` is null with zero length. `max_pages` caps either. Blocks are classified against the signals of the pages parsed. |
 | `liteparse_document_parse_with_document_signals(doc, pages, len, &out)` | Parse the given pages as pages of the whole document; see Document signals. |
 | `liteparse_document_extract(doc, pages, len, &out)` | Pre-projection pages with source page count, outline, and page geometry; set `input.content = view->content` to project and classify with `liteparse_parser_parse_content`. |
@@ -320,8 +319,8 @@ or reports the source file's metadata. `liteparse_document_metadata` borrows
 it as a `LiteParseDocumentMetadata`, a string pool and one
 `LiteParseDocumentMeta`: the `/Info` values (title, author, subject, keywords,
 creator, producer, trapped), the dates, file version, security handler
-revision and permissions, signature count, incremental-save markers and the
-catalog's XMP. The first call reads it and the document keeps it; the view is
+revision and permissions, signature count, incremental-save markers, the
+catalog's XMP and the catalog's `/Lang` as PDFium reads it. The first call reads it and the document keeps it; the view is
 valid until the document is freed.
 
 It is a call of its own because of what it costs: resolving the catalog's XMP
@@ -346,51 +345,37 @@ Page-object traversal retains at most 100,000 objects and descends at most 32
 Form XObject levels. Exceeding either limit returns
 `LITEPARSE_STATUS_RESOURCE_LIMIT` rather than a partial object tree.
 
-### Stated pages and metadata
+### Stated pages
 
 `liteparse_document_stated_pages` answers in PDF user space, the space of the
 page dictionary, where the other operations answer in a viewport. Per page it
 returns:
 
-- the media, crop, bleed, trim and art boxes, each with a presence flag: the
-  media and crop box are the page's own or the nearest ancestor's in the page
-  tree, the other three are the page dictionary's alone, and a box nobody
-  states is absent, never defaulted. Corners are normalised. `user_unit` is
-  `/UserUnit`, `1` when absent;
+- the media, crop, bleed, trim and art boxes, each with a presence flag: a
+  box is the page dictionary's own, since PDFium reads no box a page inherits
+  from the page tree, and a box the page does not state is absent, never
+  defaulted. Corners are normalised. `user_unit` is `/UserUnit`, `1` when
+  absent;
 - every annotation of `/Annots` in array order, subtypes of every kind
   included (an entry that is not a dictionary states nothing): the `/Subtype`
   name, `/Rect`, `/F` (with a presence flag, since no `/F` is not zero),
   `/Contents`, `/T`, `/NM`, `/M` and `/CreationDate` as written, the corners of
-  each `/QuadPoints` entry in the order the array lists them, the `/C`
-  components as written (`colour_count` of `0`, `1`, `3` or `4`), a link's URI
-  and the 1-based page its `/Dest` or GoTo action reaches;
+  each `/QuadPoints` entry in the order the array lists them, a link's URI,
+  the 1-based page its `/Dest` or GoTo action reaches and the left and top its
+  destination places there. No colour: PDFium reports one only converted to
+  RGB in 8-bit steps;
 - the structure elements the page's tree holds, in pre-order, each with its
   type, `/ID`, `/Lang` (its own, never inherited), `/Alt`, `/ActualText`, its
   parent's 1-based position among the page's elements (`0` for a top element)
   and the marked-content ids of its own content on the page.
 
 PDFium reads all of it, from a second document over the same input, which
-neither orientation corrections nor form flattening touch. PDFium reads the
-page dictionary alone, hides how many components a colour array has and
-refuses the colour of an annotation that has an appearance stream, so the
-inherited boxes and the exact `/C` arrays come from the file's own objects: the
-first call loads every object of the file with the PDF reader the metadata
-uses, and the document keeps what it found. That costs more than a parse on a
-file with many objects. When the objects cannot be read, a page states the
-boxes its own dictionary holds and a colour as PDFium converts it
-(`LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT` clear). A structure element's
-type is the one PDFium reports, which is `/S` after the tree's `/RoleMap`.
-
-`liteparse_document_stated_metadata` borrows the `/Info` dictionary as a list
-of entries in file order, each a key without its slash, a value and a kind
-(`LITEPARSE_INFO_KIND_TEXT`, `_NAME`, `_NUMBER`, `_BOOLEAN`, `_OTHER`; a value
-of the last kind is written as PDF syntax), custom keys included, and the
-catalog's XMP stream whole, with no size cap, decoded by its encoding. An
-encrypted file is read with the configured password. When the file's objects
-cannot be read, `LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL` is set and the
-entries are the standard keys PDFium returns, as text. An input that was
-converted to PDF has none. Like `liteparse_document_metadata` it is a call of
-its own because it loads every object of the file.
+neither orientation corrections nor form flattening touch. A structure
+element's type is the one PDFium reports, which is `/S` after the tree's
+`/RoleMap`. PDFium reads no structure tree in a document whose catalog does
+not mark it tagged (`/MarkInfo /Marked true`), so every page of such a
+document sets `LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD` and states no
+elements, whether or not the file has a tree.
 
 ## Caller-supplied content
 
