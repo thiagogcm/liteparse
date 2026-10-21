@@ -337,24 +337,14 @@
 #define LITEPARSE_TYPE_STATED_PAGES_VIEW 64
 
 /**
- * `liteparse_sizeof` selector for `LiteParseInfoEntry`.
- */
-#define LITEPARSE_TYPE_INFO_ENTRY 65
-
-/**
- * `liteparse_sizeof` selector for `LiteParseStatedMetadata`.
- */
-#define LITEPARSE_TYPE_STATED_METADATA 66
-
-/**
  * `liteparse_sizeof` selector for `LiteParseStatedSignature`.
  */
-#define LITEPARSE_TYPE_STATED_SIGNATURE 67
+#define LITEPARSE_TYPE_STATED_SIGNATURE 65
 
 /**
  * `liteparse_sizeof` selector for `LiteParseStatedRevisions`.
  */
-#define LITEPARSE_TYPE_STATED_REVISIONS 68
+#define LITEPARSE_TYPE_STATED_REVISIONS 66
 
 /**
  * Maximum sum of flat input array bytes accepted from caller-supplied content.
@@ -1010,13 +1000,12 @@
 #define LITEPARSE_RESULT_FLAG_REPAIRED_ACROFORM (1 << 5)
 
 /**
- * `LiteParseStatedPage.flags` bit: the page states, or inherits, a media box.
- * A page that does not has no usable size; PDFium itself falls back to letter.
+ * `LiteParseStatedPage.flags` bit: the page dictionary states a media box.
  */
 #define LITEPARSE_STATED_PAGE_FLAG_MEDIA_BOX (1 << 0)
 
 /**
- * Flag: a crop box is stated or inherited.
+ * Flag: the page dictionary states a crop box.
  */
 #define LITEPARSE_STATED_PAGE_FLAG_CROP_BOX (1 << 1)
 
@@ -1036,9 +1025,9 @@
 #define LITEPARSE_STATED_PAGE_FLAG_ART_BOX (1 << 4)
 
 /**
- * Flag: the catalog names a structure tree that PDFium does not read, because
- * the catalog does not mark the document tagged (`/MarkInfo /Marked true`).
- * The page then states no structure elements, whatever the tree holds.
+ * Flag: the catalog does not mark the document tagged (`/MarkInfo /Marked
+ * true`), so PDFium reads no structure tree and the page states no structure
+ * elements, whatever the file holds.
  */
 #define LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD (1 << 5)
 
@@ -1069,86 +1058,15 @@
 #define LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS (1 << 1)
 
 /**
- * Flag: the annotation states `/C`.
- */
-#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_STATED (1 << 2)
-
-/**
- * Flag: `colour_count` and the first `colour_count` of `colour` hold the stated
- * `/C`. Clear while `COLOUR_STATED` is set when the value could not be read.
- */
-#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ (1 << 3)
-
-/**
- * Flag: the colour components are the array as the file writes it. Clear
- * when the file's objects could not be read and PDFium supplied the colour:
- * three components, `0` to `1` in 8-bit steps, as PDFium converts them.
- */
-#define LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT (1 << 4)
-
-/**
  * Flag: `target_left` holds the left a link's destination states, in the
  * target page's user space.
  */
-#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT (1 << 5)
+#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_LEFT (1 << 2)
 
 /**
  * Flag: `target_top` holds the top a link's destination states.
  */
-#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP (1 << 6)
-
-/**
- * `LiteParseInfoEntry.kind`: a text string.
- */
-#define LITEPARSE_INFO_KIND_TEXT 0
-
-/**
- * A name; the value is the name without its slash.
- */
-#define LITEPARSE_INFO_KIND_NAME 1
-
-/**
- * An integer or a real number; the value is its decimal text.
- */
-#define LITEPARSE_INFO_KIND_NUMBER 2
-
-/**
- * A boolean; the value is `true` or `false`.
- */
-#define LITEPARSE_INFO_KIND_BOOLEAN 3
-
-/**
- * Anything else (null, array, dictionary); the value is its PDF syntax.
- */
-#define LITEPARSE_INFO_KIND_OTHER 4
-
-/**
- * `LiteParseStatedMetadata.flags` bit: the trailer states an information
- * dictionary (it may be empty).
- */
-#define LITEPARSE_STATED_METADATA_FLAG_HAS_INFO (1 << 0)
-
-/**
- * Flag: the catalog states an XMP stream and `xmp` holds it.
- */
-#define LITEPARSE_STATED_METADATA_FLAG_HAS_XMP (1 << 1)
-
-/**
- * Flag: the catalog states an XMP stream this library cannot decode (an
- * unsupported filter); `xmp` is empty.
- */
-#define LITEPARSE_STATED_METADATA_FLAG_XMP_UNREADABLE (1 << 2)
-
-/**
- * Flag: the file's objects could not be read, so `entries` holds only the
- * standard keys PDFium returned and `xmp` is empty.
- */
-#define LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL (1 << 3)
-
-/**
- * Flag: `language` holds the catalog's `/Lang` as written.
- */
-#define LITEPARSE_STATED_METADATA_FLAG_HAS_LANGUAGE (1 << 4)
+#define LITEPARSE_STATED_ANNOTATION_FLAG_TARGET_TOP (1 << 3)
 
 /**
  * `LiteParseStatedRevisions.flags` bit: PDFium reported where the file's
@@ -1919,6 +1837,10 @@ typedef struct {
   LiteParseStr creation_date;
   LiteParseStr mod_date;
   LiteParseStr xmp;
+  /**
+   * The catalog's `/Lang` as PDFium reads it.
+   */
+  LiteParseStr language;
   uint64_t permissions;
   uint64_t raw_file_size;
   int32_t file_version;
@@ -2534,15 +2456,6 @@ typedef struct {
    */
   uint32_t target_page;
   /**
-   * How many of `colour` are meaningful: `0`, `1`, `3` or `4`, when
-   * `COLOUR_READ` is set.
-   */
-  uint32_t colour_count;
-  /**
-   * `/C` components, in the order the array holds them.
-   */
-  float colour[4];
-  /**
    * `LITEPARSE_STATED_ANNOTATION_FLAG_*` bits.
    */
   uint32_t flags;
@@ -2670,50 +2583,6 @@ typedef struct {
   const int32_t *objects;
   size_t objects_len;
 } LiteParseStatedPagesView;
-
-/**
- * One `/Info` entry. Strings index the metadata's pool.
- */
-typedef struct {
-  /**
-   * The key without its slash.
-   */
-  LiteParseStr key;
-  LiteParseStr value;
-  /**
-   * `LITEPARSE_INFO_KIND_*`.
-   */
-  uint32_t kind;
-} LiteParseInfoEntry;
-
-/**
- * What the file states about itself: the information dictionary in file
- * order and the XMP packet. Borrowed until the document is freed. Every field
- * is absent for an input that was converted to PDF.
- */
-typedef struct {
-  /**
-   * String pool behind `entries` and `xmp`.
-   */
-  const uint8_t *pool;
-  size_t pool_len;
-  const LiteParseInfoEntry *entries;
-  size_t entries_len;
-  /**
-   * The XMP packet as text, decoded by its encoding (UTF-8, or UTF-16 by
-   * byte order mark or by the first bytes), byte order mark dropped.
-   */
-  LiteParseStr xmp;
-  /**
-   * `LITEPARSE_STATED_METADATA_FLAG_*` bits.
-   */
-  uint32_t flags;
-  /**
-   * The catalog's `/Lang`, the document's language, when
-   * `FLAG_HAS_LANGUAGE` is set.
-   */
-  LiteParseStr language;
-} LiteParseStatedMetadata;
 
 /**
  * One signature dictionary. Strings index the view's pool; `range_offset` and
@@ -3215,14 +3084,6 @@ const LiteParseScreenshotsView *liteparse_screenshots_view(const LiteParseScreen
  * the page count, de-duplicated and read in ascending order, and
  * `max_pages` caps either form.
  *
- * The media and crop boxes a page inherits and the exact `/C` arrays of its
- * annotations come from the file's own objects, which the first call on a
- * document loads whole: on a file with many objects that costs more than a
- * parse, and the document keeps what it found. When those objects cannot be
- * read, a page states the boxes its own dictionary holds and PDFium's
- * conversion of a colour (`COLOUR_EXACT` clear), and no page sets
- * `STRUCTURE_UNREAD`.
- *
  * `document` must be live, `pages` readable or null with zero length, and
  * `out` writable.
  */
@@ -3242,20 +3103,6 @@ void liteparse_stated_pages_free(LiteParseStatedPages *stated_pages);
  * `stated_pages` must be null or live.
  */
 const LiteParseStatedPagesView *liteparse_stated_pages_view(const LiteParseStatedPages *stated_pages);
-
-/**
- * Borrow what the file states about itself: every `/Info` entry with its kind
- * of value, and the whole XMP packet (see [`LiteParseStatedMetadata`]). The
- * first call on a document reads and the document keeps it; the view is valid
- * until the document is freed. The read loads every object of the file, so it
- * can take seconds on a file with many; it is separate from
- * `liteparse_document_metadata`, which stays cheap.
- *
- * `document` must be live and `out` writable; `out` receives null on
- * failure.
- */
-LiteParseStatus liteparse_document_stated_metadata(const LiteParseDocument *document,
-                                                   const LiteParseStatedMetadata **out);
 
 /**
  * Borrow the file's revisions and signatures as PDFium reads them (see

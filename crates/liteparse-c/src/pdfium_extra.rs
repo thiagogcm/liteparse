@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use liteparse_pdfium::pdfium_sys::{
-    FPDF_ACTION, FPDF_ANNOTATION, FPDF_BOOL, FPDF_DEST, FPDF_DOCUMENT, FPDF_LINK, FPDF_PAGE,
-    FPDF_SIGNATURE, FPDF_STRUCTELEMENT, FPDF_STRUCTELEMENT_ATTR_VALUE, dynamic,
+    FPDF_ACTION, FPDF_BOOL, FPDF_DEST, FPDF_DOCUMENT, FPDF_LINK, FPDF_PAGE, FPDF_SIGNATURE,
+    FPDF_STRUCTELEMENT, FPDF_STRUCTELEMENT_ATTR_VALUE, dynamic,
 };
 
 use crate::status::{FfiError, FfiResult, LITEPARSE_STATUS_DEPENDENCY_UNAVAILABLE};
@@ -31,15 +31,10 @@ pub(crate) struct Extra {
     pub(crate) bleed_box: PageBoxFn,
     pub(crate) trim_box: PageBoxFn,
     pub(crate) art_box: PageBoxFn,
-    /// `FPDFAnnot_GetColor(annot, type, &r, &g, &b, &a)`.
-    pub(crate) annot_color: unsafe extern "C" fn(
-        FPDF_ANNOTATION,
-        c_uint,
-        *mut c_uint,
-        *mut c_uint,
-        *mut c_uint,
-        *mut c_uint,
-    ) -> FPDF_BOOL,
+    /// `FPDFCatalog_GetLanguage(document, buffer, length)`: the catalog's
+    /// `/Lang`, UTF-16LE.
+    pub(crate) catalog_language:
+        unsafe extern "C" fn(FPDF_DOCUMENT, *mut c_void, c_ulong) -> c_ulong,
     /// `FPDFLink_GetDest(document, link)`: the link's own `/Dest`.
     pub(crate) link_dest: unsafe extern "C" fn(FPDF_DOCUMENT, FPDF_LINK) -> FPDF_DEST,
     /// `FPDFAction_GetType(action)`: `PDFACTION_*`.
@@ -89,7 +84,7 @@ impl Extra {
                 bleed_box: symbol(&library, c"FPDFPage_GetBleedBox")?,
                 trim_box: symbol(&library, c"FPDFPage_GetTrimBox")?,
                 art_box: symbol(&library, c"FPDFPage_GetArtBox")?,
-                annot_color: symbol(&library, c"FPDFAnnot_GetColor")?,
+                catalog_language: symbol(&library, c"FPDFCatalog_GetLanguage")?,
                 link_dest: symbol(&library, c"FPDFLink_GetDest")?,
                 action_type: symbol(&library, c"FPDFAction_GetType")?,
                 struct_element_lang: symbol(&library, c"FPDF_StructElement_GetLang")?,

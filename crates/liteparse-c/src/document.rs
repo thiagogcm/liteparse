@@ -16,17 +16,16 @@ use crate::handle::{
     required_str, state_ref, view_of, view_state,
 };
 use crate::job::Job;
-use crate::outline::outline;
 use crate::page_objects::{LiteParsePageObjects, extract_page_objects};
 use crate::parser::{LiteParseParser, OcrEngineChoice, ParserState, build_parser};
+use crate::raw::RawDocument;
 use crate::raw_text::{LiteParseRawText, extract_raw_text};
 use crate::records::{DescriptiveInfo, LiteParseDocumentMeta, LiteParseOutlineEntry, pack_all};
 use crate::render::{RenderRequest, render_pages};
 use crate::result::{LiteParseResult, ResultState};
 use crate::runtime::block_on;
 use crate::screenshots::{LiteParseScreenshots, ScreenshotsState};
-use crate::stated::FileFacts;
-use crate::stated_metadata::{self, LiteParseStatedMetadata, StatedMetadataState};
+use crate::stated::utf16;
 use crate::stated_revisions::{self, LiteParseStatedRevisions, StatedRevisionsState};
 use crate::status::{FfiError, FfiResult, LiteParseStatus, boundary};
 
@@ -114,9 +113,6 @@ pub(crate) struct Source {
     /// Held while the signals are computed, so one caller reads the
     /// document for them and the others wait for what it found.
     signals_pass: Mutex<()>,
-    /// What the file's objects state beyond PDFium's reach, read by the first
-    /// call that needs them; `None` when the file's objects cannot be read.
-    pub(crate) file_facts: OnceLock<Option<FileFacts>>,
 }
 
 /// The source file's metadata. Borrowed until the document is freed.
@@ -140,7 +136,7 @@ struct MetadataState {
 
 impl Source {
     /// Convert `input` to PDF once and read the facts every operation
-    /// reuses: page count and [outline](crate::outline).
+    /// reuses: page count and outline.
     pub(crate) fn prepare(
         config: CoreConfig,
         glyph_resolver: Option<Arc<dyn GlyphResolver>>,
@@ -156,7 +152,7 @@ impl Source {
                 stages::open(&lib, &input, password, &config.page_orientation_corrections)?;
             (
                 document.page_count().max(0) as u32,
-                outline(&lib, &input, password)?,
+                stages::outline(&document),
             )
         };
         Ok(Self {
@@ -171,7 +167,6 @@ impl Source {
             repaired: OnceLock::new(),
             signals: OnceLock::new(),
             signals_pass: Mutex::new(()),
-            file_facts: OnceLock::new(),
         })
     }
 
@@ -296,8 +291,6 @@ pub(crate) struct DocumentState {
     info: LiteParseDocumentInfo,
     /// The source file's metadata, read by the first call that asks for it.
     metadata: OnceLock<MetadataState>,
-    /// What the file states about itself, read by the first call that asks.
-    stated_metadata: OnceLock<StatedMetadataState>,
     /// The file's revisions and signatures, read by the first call that asks.
     stated_revisions: OnceLock<StatedRevisionsState>,
 }
@@ -312,8 +305,11 @@ impl Deref for DocumentState {
 }
 
 impl DescriptiveInfo {
-    fn read(document: &Document<'_>) -> Self {
-        Self {
+    /// The standard `/Info` strings and the catalog's `/Lang`, as PDFium
+    /// decodes them; `raw` is the same input opened for the catalog.
+    fn read(document: &Document<'_>, raw: &RawDocument<'_>) -> FfiResult<Self> {
+        let catalog_language = crate::pdfium_extra::extra()?.catalog_language;
+        Ok(Self {
             title: document.meta_text("Title"),
             author: document.meta_text("Author"),
             subject: document.meta_text("Subject"),
@@ -321,7 +317,11 @@ impl DescriptiveInfo {
             creator: document.meta_text("Creator"),
             producer: document.meta_text("Producer"),
             trapped: document.meta_text("Trapped"),
-        }
+            // SAFETY: `raw` is open under the PDFium lock its library holds.
+            language: utf16(|buffer, length| unsafe {
+                catalog_language(raw.handle, buffer, length)
+            }),
+        })
     }
 }
 
@@ -363,7 +363,6 @@ impl DocumentState {
             outline_entries,
             info,
             metadata: OnceLock::new(),
-            stated_metadata: OnceLock::new(),
             stated_revisions: OnceLock::new(),
         })
     }
@@ -385,10 +384,16 @@ impl DocumentState {
                 LiteParseDocumentMeta::default()
             } else {
                 let document = self.source.open(&lib, &self.input)?;
+                let raw = RawDocument::open(
+                    &lib,
+                    &self.input,
+                    self.config.password.as_deref(),
+                    "metadata",
+                )?;
                 LiteParseDocumentMeta::pack(
                     &mut pool,
                     &stages::document_metadata(&self.input, &document),
-                    &DescriptiveInfo::read(&document),
+                    &DescriptiveInfo::read(&document, &raw)?,
                 )
             };
             let view = LiteParseDocumentMetadata {
@@ -399,21 +404,6 @@ impl DocumentState {
             let _ = self.metadata.set(MetadataState { pool, view });
         }
         Ok(&self.metadata.get().expect("set above").view)
-    }
-
-    /// The `/Info` entries and XMP packet the file states, read once under the
-    /// PDFium lock like [`Self::metadata`].
-    pub(crate) fn stated_metadata(&self) -> FfiResult<&LiteParseStatedMetadata> {
-        if let Some(state) = self.stated_metadata.get() {
-            return Ok(&state.view);
-        }
-        let lib = Library::try_init()?;
-        if self.stated_metadata.get().is_none() {
-            let _ = self
-                .stated_metadata
-                .set(stated_metadata::read(&self.source, &lib)?);
-        }
-        Ok(&self.stated_metadata.get().expect("set above").view)
     }
 
     /// The revisions and signatures PDFium reads, read once under the PDFium

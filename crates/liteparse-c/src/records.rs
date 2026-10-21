@@ -637,6 +637,8 @@ pub struct LiteParseDocumentMeta {
     pub creation_date: LiteParseStr,
     pub mod_date: LiteParseStr,
     pub xmp: LiteParseStr,
+    /// The catalog's `/Lang` as PDFium reads it.
+    pub language: LiteParseStr,
     pub permissions: u64,
     pub raw_file_size: u64,
     pub file_version: i32,
@@ -1106,6 +1108,8 @@ pub(crate) struct DescriptiveInfo {
     pub(crate) creator: Option<String>,
     pub(crate) producer: Option<String>,
     pub(crate) trapped: Option<String>,
+    /// The catalog's `/Lang`.
+    pub(crate) language: Option<String>,
 }
 
 impl LiteParseDocumentMeta {
@@ -1129,6 +1133,7 @@ impl LiteParseDocumentMeta {
         let creator = describe(&descriptive.creator);
         let producer = describe(&descriptive.producer);
         let trapped = describe(&descriptive.trapped);
+        let language = describe(&descriptive.language);
         let flags = flag_bits(&[
             (has_file_version, LITEPARSE_DOC_META_FLAG_HAS_FILE_VERSION),
             (
@@ -1187,6 +1192,7 @@ impl LiteParseDocumentMeta {
             creation_date: pool.push_opt(meta.creation_date.as_deref()),
             mod_date: pool.push_opt(meta.mod_date.as_deref()),
             xmp: pool.push_opt(meta.xmp.as_deref()),
+            language,
             permissions,
             raw_file_size,
             file_version,

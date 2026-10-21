@@ -148,14 +148,16 @@ impl Document {
         unsafe { out.as_ref() }.expect("revisions")
     }
 
-    fn metadata(&self) -> Result<&LiteParseStatedMetadata, LiteParseStatus> {
+    /// The catalog's `/Lang` as the document's metadata states it.
+    fn language(&self) -> Option<String> {
         let mut out = ptr::null();
-        let status = unsafe { liteparse_document_stated_metadata(self.0, &mut out) };
-        if status != LITEPARSE_STATUS_OK {
-            assert!(out.is_null());
-            return Err(status);
-        }
-        Ok(unsafe { out.as_ref() }.expect("metadata"))
+        let status = unsafe { liteparse_document_metadata(self.0, &mut out) };
+        assert_eq!(status, LITEPARSE_STATUS_OK, "{}", last_error());
+        let metadata = unsafe { out.as_ref() }.expect("metadata");
+        pooled(
+            arr(metadata.pool, metadata.pool_len),
+            metadata.meta.language,
+        )
     }
 }
 
@@ -205,16 +207,6 @@ impl Stated {
                 pdf_flags: (a.flags & LITEPARSE_STATED_ANNOTATION_FLAG_HAS_PDF_FLAGS != 0)
                     .then_some(a.pdf_flags),
                 target_page: a.target_page,
-                colour: if a.flags & LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_STATED == 0 {
-                    Colour::Absent
-                } else if a.flags & LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_READ == 0 {
-                    Colour::Unreadable
-                } else {
-                    Colour::Components(
-                        a.colour[..a.colour_count as usize].to_vec(),
-                        a.flags & LITEPARSE_STATED_ANNOTATION_FLAG_COLOUR_EXACT != 0,
-                    )
-                },
             })
             .collect()
     }
@@ -245,13 +237,6 @@ impl Drop for Stated {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum Colour {
-    Absent,
-    Unreadable,
-    Components(Vec<f32>, bool),
-}
-
 #[derive(Debug)]
 struct Annotation {
     subtype: String,
@@ -265,7 +250,6 @@ struct Annotation {
     quads: Vec<LiteParseUserQuad>,
     pdf_flags: Option<u32>,
     target_page: u32,
-    colour: Colour,
 }
 
 #[derive(Debug)]
@@ -288,7 +272,8 @@ fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> LiteParseUserRect {
 fn boxes_pdf() -> Vec<u8> {
     assemble(&[
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        // The page tree states a media box and a crop box.
+        // The page tree states a media box and a crop box, which PDFium does not
+        // read for a page that inherits them.
         b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 \
           /MediaBox [0 0 612 792] /CropBox [10 20 600 780] >>"
             .to_vec(),
@@ -316,21 +301,18 @@ fn flags(page: &LiteParseStatedPage) -> [bool; 5] {
 }
 
 #[test]
-fn page_boxes_are_the_ones_the_page_or_its_tree_states() {
+fn page_boxes_are_the_ones_the_page_dictionary_states() {
     let (_parser, document) = open(&boxes_pdf());
     let stated = document.stated(&[]);
     let pages = stated.pages();
     assert_eq!(pages.len(), 3);
 
     assert_eq!(pages[0].page_number, 1);
-    assert_eq!(flags(&pages[0]), [true, true, false, false, false]);
-    assert_eq!(pages[0].media_box, rect(0.0, 0.0, 612.0, 792.0));
-    assert_eq!(pages[0].crop_box, rect(10.0, 20.0, 600.0, 780.0));
+    assert_eq!(flags(&pages[0]), [false; 5]);
     assert_eq!(pages[0].user_unit, 1.0);
 
-    assert_eq!(flags(&pages[1]), [true, true, true, true, true]);
+    assert_eq!(flags(&pages[1]), [true, false, true, true, true]);
     assert_eq!(pages[1].media_box, rect(0.0, 0.0, 300.0, 400.0));
-    assert_eq!(pages[1].crop_box, rect(10.0, 20.0, 600.0, 780.0));
     assert_eq!(pages[1].bleed_box, rect(5.0, 5.0, 295.0, 395.0));
     assert_eq!(pages[1].trim_box, rect(10.0, 10.0, 290.0, 390.0));
     assert_eq!(pages[1].art_box, rect(20.0, 20.0, 280.0, 380.0));
@@ -511,29 +493,6 @@ fn a_link_states_the_page_it_jumps_to() {
     assert_eq!(targets, [0, 2, 2]);
 }
 
-#[test]
-fn colour_is_the_array_as_the_file_writes_it() {
-    let (_parser, document) = open(&annotations_pdf());
-    let stated = document.stated(&[]);
-    let colours: Vec<Colour> = stated
-        .annotations(0)
-        .into_iter()
-        .map(|annotation| annotation.colour)
-        .collect();
-    assert_eq!(colours[0], Colour::Components(vec![0.0, 0.0, 1.0], true));
-    assert_eq!(colours[1], Colour::Absent);
-    assert_eq!(colours[3], Colour::Components(vec![1.0, 1.0, 0.0], true));
-    // One component, though the annotation has an appearance stream.
-    assert_eq!(colours[5], Colour::Components(vec![0.5], true));
-    // Zero components is a colour of its own: transparent.
-    assert_eq!(colours[6], Colour::Components(vec![], true));
-    assert_eq!(colours[7], Colour::Absent);
-    assert_eq!(
-        colours[9],
-        Colour::Components(vec![0.0, 0.5, 0.25, 0.1], true)
-    );
-}
-
 // ---- structure ------------------------------------------------------------------------------
 
 fn structure_pdf() -> Vec<u8> {
@@ -658,9 +617,15 @@ fn a_tree_in_a_document_not_marked_tagged_is_flagged_unread() {
 }
 
 #[test]
-fn an_untagged_page_states_no_elements() {
+fn an_untagged_document_is_flagged_unread_too() {
+    // PDFium cannot tell a document with no tree from one whose catalog does
+    // not mark its tree.
     let (_parser, document) = open(&boxes_pdf());
     let stated = document.stated(&[]);
+    assert_ne!(
+        stated.pages()[0].flags & LITEPARSE_STATED_PAGE_FLAG_STRUCTURE_UNREAD,
+        0
+    );
     assert!(stated.elements(0).is_empty());
 }
 
@@ -704,225 +669,21 @@ fn null_handles_degrade_to_null_views() {
     let status = unsafe { liteparse_document_stated_pages(ptr::null(), ptr::null(), 0, &mut out) };
     assert_eq!(status, LITEPARSE_STATUS_INVALID_ARGUMENT);
     assert!(out.is_null());
-    let mut meta = ptr::null();
-    let status = unsafe { liteparse_document_stated_metadata(ptr::null(), &mut meta) };
-    assert_eq!(status, LITEPARSE_STATUS_INVALID_ARGUMENT);
-    assert!(meta.is_null());
 }
 
-// ---- metadata -------------------------------------------------------------------------------
-
-/// A zlib stream holding `data` in stored blocks, which any inflater reads.
-fn zlib_stored(data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01];
-    let mut chunks = data.chunks(65_535).peekable();
-    if chunks.peek().is_none() {
-        out.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
-    }
-    while let Some(chunk) = chunks.next() {
-        out.push(u8::from(chunks.peek().is_none()));
-        out.extend_from_slice(&(chunk.len() as u16).to_le_bytes());
-        out.extend_from_slice(&(!(chunk.len() as u16)).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-    let (mut a, mut b) = (1u32, 0u32);
-    for byte in data {
-        a = (a + u32::from(*byte)) % 65_521;
-        b = (b + a) % 65_521;
-    }
-    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
-    out
-}
-
-fn metadata_pdf(info: &str, metadata: Option<Vec<u8>>, extra: Vec<Vec<u8>>) -> Vec<u8> {
-    let catalog = if metadata.is_some() {
-        "<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R >>"
-    } else {
-        "<< /Type /Catalog /Pages 2 0 R >>"
-    };
-    let mut objects = vec![
-        catalog.as_bytes().to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>".to_vec(),
-        metadata.unwrap_or_else(|| b"null".to_vec()),
-        info.as_bytes().to_vec(),
-    ];
-    objects.extend(extra);
-    assemble_with(&objects, "/Root 1 0 R /Info 5 0 R")
-}
-
-fn entries(document: &Document) -> Vec<(String, String, u32)> {
-    let meta = document.metadata().expect("metadata");
-    let pool = arr(meta.pool, meta.pool_len);
-    arr(meta.entries, meta.entries_len)
-        .iter()
-        .map(|entry| {
-            (
-                pooled(pool, entry.key).expect("key"),
-                pooled(pool, entry.value).unwrap_or_default(),
-                entry.kind,
-            )
-        })
-        .collect()
-}
-
-fn xmp(document: &Document) -> Option<String> {
-    let meta = document.metadata().expect("metadata");
-    pooled(arr(meta.pool, meta.pool_len), meta.xmp)
-}
+// ---- language -------------------------------------------------------------------------------
 
 #[test]
-fn every_info_entry_is_stated_with_its_kind_in_file_order() {
-    let pdf = metadata_pdf(
-        "<< /Title (A title) /Author <FEFF00C900E9> /Trapped /True /Version 3 /Ratio 1.5 \
-         /Secret true /Keywords [(a) (b)] /Subject 6 0 R /CreationDate (D:20240101000000Z) \
-         /Cleared null /Custom (kept) >>",
-        None,
-        vec![b"(Indirect subject)".to_vec()],
-    );
-    let (_parser, document) = open(&pdf);
-    let expected: Vec<(&str, &str, u32)> = vec![
-        ("Title", "A title", LITEPARSE_INFO_KIND_TEXT),
-        ("Author", "\u{c9}\u{e9}", LITEPARSE_INFO_KIND_TEXT),
-        ("Trapped", "True", LITEPARSE_INFO_KIND_NAME),
-        ("Version", "3", LITEPARSE_INFO_KIND_NUMBER),
-        ("Ratio", "1.5", LITEPARSE_INFO_KIND_NUMBER),
-        ("Secret", "true", LITEPARSE_INFO_KIND_BOOLEAN),
-        ("Keywords", "[(a) (b)]", LITEPARSE_INFO_KIND_OTHER),
-        ("Subject", "Indirect subject", LITEPARSE_INFO_KIND_TEXT),
-        (
-            "CreationDate",
-            "D:20240101000000Z",
-            LITEPARSE_INFO_KIND_TEXT,
-        ),
-        ("Cleared", "null", LITEPARSE_INFO_KIND_OTHER),
-        ("Custom", "kept", LITEPARSE_INFO_KIND_TEXT),
-    ];
-    let actual = entries(&document);
-    let actual: Vec<(&str, &str, u32)> = actual
-        .iter()
-        .map(|(key, value, kind)| (key.as_str(), value.as_str(), *kind))
-        .collect();
-    assert_eq!(actual, expected);
-    let meta = document.metadata().unwrap();
-    assert_ne!(meta.flags & LITEPARSE_STATED_METADATA_FLAG_HAS_INFO, 0);
-    assert_eq!(meta.flags & LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL, 0);
-}
-
-#[test]
-fn a_file_without_an_info_dictionary_states_no_entries() {
+fn the_metadata_states_the_catalog_language_as_pdfium_reads_it() {
     let pdf = assemble(&[
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /Lang (pt-BR) >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>".to_vec(),
     ]);
     let (_parser, document) = open(&pdf);
-    let meta = document.metadata().unwrap();
-    assert_eq!(meta.entries_len, 0);
-    assert_eq!(meta.flags, 0);
-    assert_eq!(xmp(&document), None);
-}
-
-#[test]
-fn the_xmp_packet_is_whole_however_large() {
-    let filler = "x".repeat(200 * 1024);
-    let packet = format!(
-        "<?xpacket begin=\"\"?><x:xmpmeta><rdf:li>first \u{e9}</rdf:li><!-- {filler} --><rdf:li>last</rdf:li></x:xmpmeta><?xpacket end=\"w\"?>"
-    );
-    for (dict, content) in [
-        ("/Type /Metadata /Subtype /XML", packet.clone().into_bytes()),
-        (
-            "/Type /Metadata /Subtype /XML /Filter /FlateDecode",
-            zlib_stored(packet.as_bytes()),
-        ),
-    ] {
-        let pdf = metadata_pdf("<< /Title (T) >>", Some(stream(dict, &content)), vec![]);
-        let (_parser, document) = open(&pdf);
-        let decoded = xmp(&document).expect("xmp");
-        assert_eq!(decoded, packet);
-        let meta = document.metadata().unwrap();
-        assert_ne!(meta.flags & LITEPARSE_STATED_METADATA_FLAG_HAS_XMP, 0);
-    }
-}
-
-#[test]
-fn a_utf16_xmp_packet_is_decoded_by_its_encoding() {
-    let packet = "<?xpacket begin=\"\"?><x:xmpmeta>caf\u{e9}</x:xmpmeta>";
-    let mut bytes = vec![0xFE, 0xFF];
-    bytes.extend(packet.encode_utf16().flat_map(u16::to_be_bytes));
-    let pdf = metadata_pdf(
-        "<< >>",
-        Some(stream("/Type /Metadata /Subtype /XML", &bytes)),
-        vec![],
-    );
-    let (_parser, document) = open(&pdf);
-    assert_eq!(xmp(&document).as_deref(), Some(packet));
-}
-
-#[test]
-fn an_xmp_stream_that_cannot_be_decoded_is_flagged_not_guessed() {
-    let pdf = metadata_pdf(
-        "<< >>",
-        Some(stream(
-            "/Type /Metadata /Subtype /XML /Filter /RunLengthDecode",
-            b"\x00a\x80",
-        )),
-        vec![],
-    );
-    let (_parser, document) = open(&pdf);
-    let meta = document.metadata().unwrap();
-    assert_eq!(xmp(&document), None);
-    assert_ne!(
-        meta.flags & LITEPARSE_STATED_METADATA_FLAG_XMP_UNREADABLE,
-        0
-    );
-    assert_eq!(meta.flags & LITEPARSE_STATED_METADATA_FLAG_HAS_XMP, 0);
-}
-
-#[test]
-fn metadata_is_read_once_and_kept_with_the_document() {
-    let pdf = metadata_pdf("<< /Title (T) >>", None, vec![]);
-    let (_parser, document) = open(&pdf);
-    let first = document.metadata().unwrap() as *const LiteParseStatedMetadata;
-    let second = document.metadata().unwrap() as *const LiteParseStatedMetadata;
-    assert_eq!(first, second);
-}
-
-#[test]
-fn a_file_whose_objects_cannot_be_read_states_the_standard_keys_from_pdfium() {
-    let mut pdf = metadata_pdf(
-        "<< /Title (Damaged) /Custom (lost) /ModDate (D:20240101000000Z) >>",
-        None,
-        vec![],
-    );
-    // Every cross-reference entry points into the middle of nothing.
-    let table = pdf.windows(5).position(|w| w == b"xref\n").unwrap();
-    let trailer = pdf.windows(7).position(|w| w == b"trailer").unwrap();
-    for at in table..trailer {
-        if pdf[at + 10..].starts_with(b" 00000 n")
-            && pdf[at..at + 10].iter().all(u8::is_ascii_digit)
-        {
-            pdf[at..at + 10].copy_from_slice(b"0000000007");
-        }
-    }
-    let (_parser, document) = open(&pdf);
-    let meta = document.metadata().unwrap();
-    assert_ne!(meta.flags & LITEPARSE_STATED_METADATA_FLAG_INFO_PARTIAL, 0);
-    assert_eq!(
-        entries(&document),
-        [
-            (
-                "Title".to_owned(),
-                "Damaged".to_owned(),
-                LITEPARSE_INFO_KIND_TEXT
-            ),
-            (
-                "ModDate".to_owned(),
-                "D:20240101000000Z".to_owned(),
-                LITEPARSE_INFO_KIND_TEXT
-            ),
-        ]
-    );
+    assert_eq!(document.language().as_deref(), Some("pt-BR"));
+    let (_parser, untagged) = open(&boxes_pdf());
+    assert_eq!(untagged.language(), None);
 }
 
 // ---- revisions ------------------------------------------------------------------------------

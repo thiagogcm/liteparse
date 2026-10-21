@@ -2074,7 +2074,6 @@ dependencies = [
  "libloading",
  "liteparse",
  "liteparse-pdfium",
- "lopdf",
  "serde_json",
  "tokio",
 ]
