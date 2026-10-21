@@ -26,6 +26,7 @@ mod runtime;
 pub mod screenshots;
 pub mod stated;
 pub mod stated_metadata;
+pub mod stated_revisions;
 pub mod status;
 mod structure;
 #[cfg(feature = "tesseract")]
@@ -52,4 +53,5 @@ pub use result::*;
 pub use screenshots::*;
 pub use stated::*;
 pub use stated_metadata::*;
+pub use stated_revisions::*;
 pub use status::*;

@@ -141,6 +141,13 @@ impl Document {
             .unwrap_or_else(|status| panic!("{status}: {}", last_error()))
     }
 
+    fn revisions(&self) -> &LiteParseStatedRevisions {
+        let mut out = ptr::null();
+        let status = unsafe { liteparse_document_stated_revisions(self.0, &mut out) };
+        assert_eq!(status, LITEPARSE_STATUS_OK, "{}", last_error());
+        unsafe { out.as_ref() }.expect("revisions")
+    }
+
     fn metadata(&self) -> Result<&LiteParseStatedMetadata, LiteParseStatus> {
         let mut out = ptr::null();
         let status = unsafe { liteparse_document_stated_metadata(self.0, &mut out) };
@@ -916,4 +923,87 @@ fn a_file_whose_objects_cannot_be_read_states_the_standard_keys_from_pdfium() {
             ),
         ]
     );
+}
+
+// ---- revisions ------------------------------------------------------------------------------
+
+/// A one-page file with a signature field, then an incremental update that adds a text
+/// annotation, each closed by its own trailer: the first revision's length and the whole file's.
+fn revised_pdf() -> (Vec<u8>, usize) {
+    let base = assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /SigFlags 3 >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        b"<< /FT /Sig /T (Signature1) /V 5 0 R >>".to_vec(),
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached \
+          /ByteRange [0 10 20 30] /M (D:20240102030405Z) /Contents <00> >>"
+            .to_vec(),
+    ]);
+    let first = base.len();
+    let xref = base
+        .windows(4)
+        .rposition(|window| window == b"xref")
+        .expect("the base has a table");
+    let mut pdf = base.clone();
+    pdf.extend_from_slice(b"\n");
+    let note = pdf.len();
+    pdf.extend_from_slice(
+        b"6 0 obj\n<< /Type /Annot /Subtype /Text /Rect [10 10 20 20] >>\nendobj\n",
+    );
+    let table = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "xref\n6 1\n{note:010} 00000 n \ntrailer\n<< /Size 7 /Root 1 0 R /Prev {xref} >>\nstartxref\n{table}\n%%EOF\n"
+        )
+        .as_bytes(),
+    );
+    // The first revision ends after its marker and the line end the update begins with.
+    (pdf, first + 1)
+}
+
+#[test]
+fn the_ends_of_the_trailers_and_the_signatures_are_stated() {
+    let (pdf, first) = revised_pdf();
+    let (_parser, document) = open(&pdf);
+    let revisions = document.revisions();
+    assert_ne!(revisions.flags & LITEPARSE_STATED_REVISIONS_FLAG_ENDS, 0);
+    assert_eq!(
+        arr(revisions.ends, revisions.ends_len),
+        &[first as u64, pdf.len() as u64]
+    );
+    let pool = arr(revisions.pool, revisions.pool_len);
+    let signatures = arr(revisions.signatures, revisions.signatures_len);
+    assert_eq!(signatures.len(), 1);
+    let signature = signatures[0];
+    assert_eq!(
+        pooled(pool, signature.sub_filter).as_deref(),
+        Some("adbe.pkcs7.detached")
+    );
+    assert_eq!(
+        pooled(pool, signature.time).as_deref(),
+        Some("D:20240102030405Z")
+    );
+    let ranges = arr(revisions.ranges, revisions.ranges_len);
+    assert_eq!(
+        range(ranges, signature.range_offset, signature.range_count),
+        &[0, 10, 20, 30]
+    );
+}
+
+#[test]
+fn an_unsigned_file_written_once_has_one_end_and_no_signature() {
+    let mut pdf = boxes_pdf();
+    pdf.push(b'\n');
+    let (_parser, document) = open(&pdf);
+    let revisions = document.revisions();
+    assert_eq!(arr(revisions.ends, revisions.ends_len), &[pdf.len() as u64]);
+    assert_eq!(revisions.signatures_len, 0);
+}
+
+#[test]
+fn a_last_marker_without_a_line_end_states_no_end() {
+    let pdf = boxes_pdf();
+    let (_parser, document) = open(&pdf);
+    let revisions = document.revisions();
+    assert_eq!(revisions.ends_len, 0);
 }
