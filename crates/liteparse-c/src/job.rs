@@ -106,7 +106,7 @@ impl Job {
         let lib = Library::try_init()?;
         let input = source.extraction_input(&lib);
         let document = source.open(&lib, input)?;
-        let form_type = config.extract_form_fields.then(|| document.form_type());
+        let form_type = config.extract_form_fields.then(|| document.form_type_at_load());
         let creator = document.meta_text("Creator").filter(|v| !v.is_empty());
         let producer = document.meta_text("Producer").filter(|v| !v.is_empty());
         let xfa_packets = config

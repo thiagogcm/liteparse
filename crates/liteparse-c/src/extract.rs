@@ -16,7 +16,9 @@ pub(crate) fn extract_pages(
     let config = &state.config;
     let lib = Library::try_init()?;
     let document = state.open(&lib, state.extraction_input(&lib))?;
-    let form_type = config.extract_form_fields.then(|| document.form_type());
+    let form_type = config
+        .extract_form_fields
+        .then(|| document.form_type_at_load());
     let core = state.core();
     let request = core.extract_request(pages.as_deref(), config.max_pages);
     let mut extracted = stages::extract(&document, &request)?;
